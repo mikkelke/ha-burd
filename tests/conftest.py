@@ -17,11 +17,11 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 def reset_one_shot_warnings():
     """Clear the "already warned this session" set between tests.
 
-    ``parcels._unmapped_statuses_logged`` is module-level, so without this a
-    test's one-shot-warning assertion would depend on which test already
-    triggered that status code first.
+    ``parcels._warned`` is module-level, so without this a test's
+    one-shot-warning assertion would depend on which test already triggered
+    that warning first.
     """
-    parcels._unmapped_statuses_logged.clear()
+    parcels._warned.clear()
 
 
 if sys.platform == "win32":

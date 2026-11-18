@@ -3,7 +3,7 @@ description: Suggest a new feature or enhancement for the Burd integration
 title: "[Feature]: "
 labels: ["enhancement"]
 assignees:
-  - peter-mdf
+  - mikkelke
 body:
   - type: textarea
     id: feature

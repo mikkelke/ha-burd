@@ -22,16 +22,24 @@ from custom_components.burd.const import (
 from custom_components.burd.parcels import (
     apply_delivered_filter,
     build_history,
-    format_dimensions,
+    is_final,
     map_event_status,
     map_parcel_status,
     normalize_parcel,
     parse_iso,
+    sender_name,
     sort_parcels_by_ts,
-    to_iso_timestamp,
+    to_utc_iso,
 )
 
-from .payloads import active_sample, delivered_sample, event, pickup_sample
+from .payloads import (
+    ACTIVE_CODE,
+    DELIVERED_CODE,
+    active_sample,
+    delivered_sample,
+    pickup_sample,
+    status,
+)
 
 # ---------------------------------------------------------------------------
 # map_parcel_status / map_event_status
@@ -41,13 +49,17 @@ from .payloads import active_sample, delivered_sample, event, pickup_sample
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
-        ("REGISTERED", ParcelStatus.REGISTERED),
-        ("IN_TRANSIT", ParcelStatus.IN_TRANSIT),
-        ("OUT_FOR_DELIVERY", ParcelStatus.OUT_FOR_DELIVERY),
-        ("AT_PICKUP_POINT", ParcelStatus.AT_PICKUP_POINT),
-        ("DELIVERED", ParcelStatus.DELIVERED),
-        ("RETURN_TO_SENDER", ParcelStatus.RETURNING),
-        ("EXCEPTION", ParcelStatus.PROBLEM),
+        ("registered", ParcelStatus.REGISTERED),
+        ("notReceived", ParcelStatus.REGISTERED),
+        ("received", ParcelStatus.IN_TRANSIT),
+        ("receivedFlex", ParcelStatus.IN_TRANSIT),
+        ("deliveryOnTheWay", ParcelStatus.OUT_FOR_DELIVERY),
+        ("delivered", ParcelStatus.DELIVERED),
+        ("deliveryFailed", ParcelStatus.PROBLEM),
+        ("returnToSender", ParcelStatus.RETURNING),
+        ("canceled", ParcelStatus.PROBLEM),
+        # the labels endpoint spells them PascalCase
+        ("DeliveryOnTheWay", ParcelStatus.OUT_FOR_DELIVERY),
     ],
 )
 def test_map_parcel_status_known(code, expected):
@@ -60,22 +72,22 @@ def test_map_parcel_status_missing_is_unknown():
 
 
 def test_map_parcel_status_unmapped_is_unknown():
-    assert map_parcel_status("TELEPORTED") == ParcelStatus.UNKNOWN
+    assert map_parcel_status("teleported") == ParcelStatus.UNKNOWN
 
 
 def test_map_event_status_missing_and_unmapped_are_none():
     """History keeps ``null`` rather than ``unknown`` so consumers can tell
     "no mapping" from "mapped to unknown"."""
     assert map_event_status(None) is None
-    assert map_event_status("SOMETHING_NEW") is None
-    assert map_event_status("DELIVERED") == ParcelStatus.DELIVERED
+    assert map_event_status("somethingNew") is None
+    assert map_event_status("delivered") == ParcelStatus.DELIVERED
 
 
 def test_unmapped_status_warns_only_once(caplog):
-    assert map_parcel_status("ABDUCTED") == ParcelStatus.UNKNOWN
-    assert map_parcel_status("ABDUCTED") == ParcelStatus.UNKNOWN
-    assert caplog.text.count("ABDUCTED") == 1
-    assert "issues/new" in caplog.text
+    assert map_parcel_status("abducted") == ParcelStatus.UNKNOWN
+    assert map_parcel_status("abducted") == ParcelStatus.UNKNOWN
+    assert caplog.text.count("abducted") == 1
+    assert "issues/new?template=unrecognised_status.yml" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -91,25 +103,30 @@ def test_parse_iso_handles_z_naive_and_garbage():
     assert parse_iso(None) is None
 
 
-def test_to_iso_timestamp_converts_epoch_milliseconds():
-    assert to_iso_timestamp(1784203767167) == "2026-07-16T12:09:27.167000+00:00"
-    assert to_iso_timestamp("2026-04-29T13:12:42Z") == "2026-04-29T13:12:42Z"
-    assert to_iso_timestamp(None) is None
-    assert to_iso_timestamp(10**20) is None  # out of range -> None, never raises
+def test_to_utc_iso_keeps_offsets():
+    assert to_utc_iso("2026-11-17T19:41:08Z", "created") == "2026-11-17T19:41:08+00:00"
+    assert (
+        to_utc_iso("2026-11-17T20:41:08+01:00", "created")
+        == "2026-11-17T20:41:08+01:00"
+    )
+    assert to_utc_iso(None, "created") is None
+    assert to_utc_iso(17, "created") is None
 
 
-def test_format_dimensions_rounds_the_text():
-    assert format_dimensions(27.9, 5.1, 27.9)["text"] == "28 x 5 x 28 cm"
+def test_to_utc_iso_reads_naive_as_utc_and_warns_once(caplog):
+    assert to_utc_iso("2026-11-17T19:41:08.123", "created") == (
+        "2026-11-17T19:41:08.123000+00:00"
+    )
+    to_utc_iso("2026-11-17T19:41:09", "created")
+    assert caplog.text.count("created has no UTC offset") == 1
+    # field name only, never the value
+    assert "19:41" not in caplog.text
 
 
-def test_format_dimensions_needs_all_three_axes():
-    assert format_dimensions(30, 20, 10) == {
-        "length": 30,
-        "width": 20,
-        "height": 10,
-        "text": "30 x 20 x 10 cm",
-    }
-    assert format_dimensions(30, None, 10) is None
+def test_to_utc_iso_unparseable_warns_with_field_name(caplog):
+    assert to_utc_iso("tomorrow", "timeWindow.start") is None
+    assert "unparseable timestamp in timeWindow.start" in caplog.text
+    assert "tomorrow" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -117,41 +134,61 @@ def test_format_dimensions_needs_all_three_axes():
 # ---------------------------------------------------------------------------
 
 
-def test_build_history_orders_oldest_to_newest():
-    history = build_history(delivered_sample()["events"])
-    assert len(history) == 4
-    assert history[0]["raw_status"] == "Shipment announced"
-    assert history[0]["status"] == ParcelStatus.REGISTERED
-    assert history[-1]["status"] == ParcelStatus.DELIVERED
+def test_build_history_orders_oldest_to_newest_with_burds_text():
+    raw = delivered_sample()
+    history = build_history(list(reversed(raw["statuses"])), raw["descriptions"])
+    assert [entry["status"] for entry in history] == [
+        ParcelStatus.REGISTERED,
+        ParcelStatus.IN_TRANSIT,
+        ParcelStatus.OUT_FOR_DELIVERY,
+        ParcelStatus.DELIVERED,
+    ]
+    assert history[0]["raw_status"] == "Waiting for the webshop."
+    assert history[-1]["timestamp"] == "2026-11-17T19:41:08+00:00"
 
 
 def test_build_history_caps_to_max_events():
-    events = [
-        event("IN_TRANSIT", f"2026-04-{day:02d}T10:00:00Z", "moved")
-        for day in range(1, 26)
+    statuses = [
+        status("received", f"2026-11-{day:02d}T10:00:00Z") for day in range(1, 26)
     ]
-    assert len(build_history(events, max_events=20)) == 20
+    assert len(build_history(statuses, max_events=20)) == 20
 
 
 def test_build_history_handles_missing_and_malformed():
     assert build_history(None) == []
-    assert build_history([{"statusCode": "IN_TRANSIT"}]) == []  # no timestamp
+    assert build_history([{"statusType": "received"}]) == []  # no timestamp
     assert build_history(["not-a-dict"]) == []
 
 
-def test_build_history_keeps_unparseable_timestamp_last():
+def test_build_history_falls_back_to_display_text_then_status_type():
     history = build_history(
         [
-            event("REGISTERED", "2026-04-24T10:00:00Z", "fine"),
-            event("IN_TRANSIT", "not-a-date", "odd"),
+            {**status("received", "2026-11-16T10:00:00Z"), "displayText": "Modtaget"},
+            status("receivedFlex", "2026-11-17T10:00:00Z"),
         ]
     )
-    assert [entry["raw_status"] for entry in history] == ["fine", "odd"]
+    assert [entry["raw_status"] for entry in history] == ["Modtaget", "receivedFlex"]
 
 
-def test_build_history_falls_back_to_status_code_without_text():
-    history = build_history([event("IN_TRANSIT", "2026-04-24T10:00:00Z", "")])
-    assert history[0]["raw_status"] == "IN_TRANSIT"
+# ---------------------------------------------------------------------------
+# sender_name / is_final
+# ---------------------------------------------------------------------------
+
+
+def test_sender_name_title_cases_unknown_ids():
+    assert sender_name("proshop") == "Proshop"
+    assert sender_name("postnord") == "PostNord"
+    assert sender_name("coolshop.dk") == "Coolshop.dk"
+    assert sender_name("") is None
+    assert sender_name(None) is None
+
+
+def test_is_final_reads_the_newest_status():
+    raw = active_sample()
+    assert is_final(raw) == (False, "2026-11-17T16:02:44+00:00")
+    raw["statuses"].append(status("canceled", "2026-11-18T08:00:00Z"))
+    assert is_final(raw) == (True, "2026-11-18T08:00:00+00:00")
+    assert is_final({}) == (False, None)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +241,7 @@ def test_capabilities_match_what_normalize_parcel_actually_returns():
     delivered = normalize_parcel(delivered_sample())
     active = normalize_parcel(active_sample())
     pickup = normalize_parcel(pickup_sample())
+    assert pickup["pickup_point"] is None  # door delivery only
     with_history = normalize_parcel(delivered_sample(), include_history=True)
 
     if "weight" in CAPABILITIES:
@@ -223,20 +261,20 @@ def test_capabilities_match_what_normalize_parcel_actually_returns():
 def test_normalize_delivered_parcel():
     parcel = normalize_parcel(delivered_sample())
     assert parcel["carrier"] == "Burd"
-    assert parcel["barcode"] == "EXAMPLE123456"
-    assert parcel["sender"] == "Example Shop"
-    assert parcel["receiver"] == "Jane Doe"
+    assert parcel["barcode"] == DELIVERED_CODE
+    assert parcel["sender"] == "Exampleshop"
+    assert parcel["receiver"] is None
     assert parcel["status"] == ParcelStatus.DELIVERED
-    assert parcel["raw_status"] == "Delivered to the recipient"
+    assert parcel["raw_status"] == "Delivered."
     assert parcel["delivered"] is True
-    assert parcel["delivered_at"] == "2026-04-29T13:12:42Z"
-    # A delivered parcel drops its ETA — the window is meaningless once it has
-    # arrived.
+    assert parcel["delivered_at"] == "2026-11-17T19:41:08+00:00"
     assert parcel["planned_from"] is None
     assert parcel["planned_to"] is None
-    assert parcel["url"] == "https://example-carrier.test/track?code=EXAMPLE123456"
-    assert parcel["weight"] == 1.25
-    assert parcel["dimensions"]["text"] == "30 x 20 x 10 cm"
+    assert parcel["pickup"] is False
+    assert parcel["pickup_point"] is None
+    assert parcel["url"] == f"https://burd.dk/track?code={DELIVERED_CODE}"
+    assert parcel["weight"] is None
+    assert parcel["dimensions"] is None
     assert parcel["history"] is None  # opt-in, default off
 
 
@@ -246,58 +284,68 @@ def test_normalize_history_is_opt_in():
     assert parcel["history"][0]["status"] == ParcelStatus.REGISTERED
 
 
-def test_normalize_active_parcel_has_window():
+def test_normalize_sorts_statuses_whatever_order_burd_sends():
+    raw = delivered_sample()
+    raw["statuses"].reverse()
+    assert normalize_parcel(raw)["status"] == ParcelStatus.DELIVERED
+
+
+def test_normalize_active_parcel_has_the_min_levering_window():
     parcel = normalize_parcel(active_sample())
+    assert parcel["barcode"] == ACTIVE_CODE
     assert parcel["status"] == ParcelStatus.OUT_FOR_DELIVERY
     assert parcel["delivered"] is False
-    assert parcel["planned_from"] == "2026-04-29T13:00:00Z"
-    assert parcel["planned_to"] == "2026-04-29T15:00:00Z"
+    assert parcel["sender"] == "Example Shop"
+    assert parcel["planned_from"] == "2026-11-18T17:00:00+00:00"
+    assert parcel["planned_to"] == "2026-11-18T21:00:00+00:00"
 
 
 def test_normalize_collapses_point_estimate_to_no_window_end():
     raw = active_sample()
-    raw["estimatedDelivery"]["to"] = raw["estimatedDelivery"]["from"]
+    raw["timeWindow"]["end"] = raw["timeWindow"]["start"]
     parcel = normalize_parcel(raw)
-    assert parcel["planned_from"] == "2026-04-29T13:00:00Z"
+    assert parcel["planned_from"] == "2026-11-18T17:00:00+00:00"
     assert parcel["planned_to"] is None
 
 
-def test_normalize_pickup_parcel():
-    parcel = normalize_parcel(pickup_sample())
-    assert parcel["status"] == ParcelStatus.AT_PICKUP_POINT
-    assert parcel["pickup"] is True
-    assert parcel["pickup_point"] == "Example Point Central Station"
+@pytest.mark.parametrize("final", ["canceled", "returnToSender"])
+def test_normalize_clears_the_window_once_final(final):
+    raw = active_sample()
+    raw["statuses"].append(status(final, "2026-11-18T08:00:00Z"))
+    parcel = normalize_parcel(raw)
+    assert parcel["planned_from"] is None
+    assert parcel["planned_to"] is None
+
+
+def test_normalize_unmapped_newest_falls_back_to_history(caplog):
+    raw = active_sample()
+    raw["statuses"].append(status("teleported", "2026-11-18T08:00:00Z"))
+    parcel = normalize_parcel(raw)
+    assert parcel["status"] == ParcelStatus.OUT_FOR_DELIVERY
+    assert parcel["raw_status"] == "teleported"
+    assert "status=teleported" in caplog.text
+
+
+def test_normalize_unmapped_only_status_is_unknown():
+    raw = {"number": ACTIVE_CODE, "statuses": [status("teleported", "2026-11-18Z")]}
+    assert normalize_parcel(raw)["status"] == ParcelStatus.UNKNOWN
 
 
 def test_normalize_pending_placeholder():
-    """A tracked-but-not-yet-scanned code still yields a full parcel dict."""
-    parcel = normalize_parcel({"trackingNumber": "EXAMPLE000001"})
+    """A tracked-but-not-yet-known number still yields a full parcel dict."""
+    parcel = normalize_parcel({}, tracking_code=ACTIVE_CODE)
+    assert parcel["barcode"] == ACTIVE_CODE
     assert parcel["status"] == ParcelStatus.UNKNOWN
     assert parcel["delivered"] is False
     assert parcel["raw_status"] is None
-    assert parcel["weight"] is None
-    assert parcel["dimensions"] is None
-    assert parcel["history"] is None
-
-
-def test_normalize_blank_fields_become_none():
-    raw = active_sample()
-    raw["sender"] = ""
-    raw["recipient"] = ""
-    parcel = normalize_parcel(raw)
     assert parcel["sender"] is None
-    assert parcel["receiver"] is None
+    assert parcel["url"] == f"https://burd.dk/track?code={ACTIVE_CODE}"
+    assert parcel["history"] is None
 
 
 def test_normalize_keeps_raw_payload():
     raw = active_sample()
     assert normalize_parcel(raw)["raw"] is raw
-
-
-def test_normalize_falls_back_to_status_code_without_text():
-    raw = active_sample()
-    raw["statusText"] = None
-    assert normalize_parcel(raw)["raw_status"] == "OUT_FOR_DELIVERY"
 
 
 # ---------------------------------------------------------------------------

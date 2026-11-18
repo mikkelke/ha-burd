@@ -13,8 +13,7 @@ from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN
 
-# TODO(carrier): point this at the carrier's own site.
-CONFIGURATION_URL = "https://example-carrier.test"
+CONFIGURATION_URL = "https://burd.dk"
 
 ATTRIBUTION = "Data provided by Burd"
 

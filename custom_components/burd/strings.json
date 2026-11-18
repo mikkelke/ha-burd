@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Burd",
-        "description": "Burd tracking needs no account or postal code — the hub is created right away. Add parcels afterwards via the integration options or the `burd.track_parcel` service."
+        "description": "Burd tracking needs no account — the hub is created right away. Add parcels afterwards via the integration options or the `burd.track_parcel` service."
       }
     },
     "abort": {
@@ -27,7 +27,7 @@
               "remove": "Remove parcels"
             },
             "data_description": {
-              "add": "Enter a Burd tracking code to start tracking it. You find it on the shipping confirmation or the missed-delivery card."
+              "add": "Paste the Min levering link from Burd's text message or e-mail, or enter the 18-digit shipment number."
             }
           },
           "delivered": {
@@ -54,8 +54,12 @@
       },
       "parcels": {
         "title": "Manage parcels",
+        "description": "One shipment per line. Paste the Min levering link (https://k.burd.dk/f/…) from Burd's text message or e-mail, or enter the 18-digit shipment number. With the link, the integration also shows the evening Burd plans to deliver; with the number alone, only the status.",
         "data": {
-          "tracking_codes": "Tracking codes"
+          "tracking_codes": "Links or shipment numbers"
+        },
+        "data_description": {
+          "tracking_codes": "A Min levering link, a burd.dk tracking link, NUMBER/TOKEN or a shipment number."
         }
       },
       "settings": {
@@ -68,7 +72,11 @@
       }
     },
     "error": {
-      "invalid_tracking_code": "That does not look like a Burd tracking code.",
+      "invalid_tracking_code": "That does not look like a Burd shipment number or link.",
+      "unsupported_link": "Only the Min levering link (https://k.burd.dk/f/…) and the burd.dk tracking link are supported.",
+      "not_recognised": "Burd does not recognise that Min levering link. It may have expired; enter the shipment number instead.",
+      "token_mismatch": "That Min levering link belongs to another shipment number.",
+      "cannot_connect": "Could not reach Burd. Try again later.",
       "already_tracked": "That parcel is already being tracked."
     }
   },
@@ -83,21 +91,21 @@
   "services": {
     "track_parcel": {
       "name": "Track parcel",
-      "description": "Start tracking a parcel by its Burd tracking code.",
+      "description": "Start tracking a Burd shipment by its Min levering link or shipment number.",
       "fields": {
         "tracking_code": {
-          "name": "Tracking code",
-          "description": "The Burd tracking code."
+          "name": "Link or shipment number",
+          "description": "The Min levering link from Burd's message, or the 18-digit shipment number. Home Assistant stores the data of every service call, including the link; add the parcel in the integration options if you do not want that."
         }
       }
     },
     "untrack_parcel": {
       "name": "Untrack parcel",
-      "description": "Stop tracking a parcel by its Burd tracking code.",
+      "description": "Stop tracking a Burd shipment by its Min levering link or shipment number.",
       "fields": {
         "tracking_code": {
-          "name": "Tracking code",
-          "description": "The Burd tracking code to stop tracking."
+          "name": "Link or shipment number",
+          "description": "The Min levering link or shipment number to stop tracking."
         }
       }
     }
@@ -128,14 +136,6 @@
       },
       "next_delivery": {
         "name": "Next delivery"
-      },
-      "en_route_to_pickup_point": {
-        "name": "En route to pickup point",
-        "unit_of_measurement": "parcels"
-      },
-      "awaiting_pickup": {
-        "name": "Awaiting pickup",
-        "unit_of_measurement": "parcels"
       },
       "delivered_parcels": {
         "name": "Delivered parcels",

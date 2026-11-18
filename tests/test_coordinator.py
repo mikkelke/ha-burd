@@ -4,6 +4,7 @@ The parcel mapping itself is covered by ``test_parcels.py``.
 """
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 from homeassistant.helpers import device_registry as dr
@@ -16,15 +17,23 @@ from custom_components.burd.const import (
     CONF_DELIVERED_FILTER_AMOUNT,
     CONF_DELIVERED_FILTER_TYPE,
     CONF_PARCELS,
+    CONF_TOKEN,
     CONF_TRACKING_CODE,
     DOMAIN,
     ParcelStatus,
 )
 from custom_components.burd.coordinator import BurdCoordinator
 
-from .payloads import ACTIVE_CODE, DELIVERED_CODE, active_sample, delivered_sample
+from .payloads import (
+    ACTIVE_CODE,
+    DELIVERED_CODE,
+    TOKEN,
+    active_sample,
+    delivered_sample,
+    status,
+)
 
-OTHER_CODE = "EXAMPLE888888"
+OTHER_CODE = "100000000000000003"
 
 
 def _entry_with(parcels: list[dict]) -> MockConfigEntry:
@@ -43,8 +52,7 @@ def _entry_with(parcels: list[dict]) -> MockConfigEntry:
 
 def _in_transit(code: str = ACTIVE_CODE) -> dict:
     sample = active_sample(code)
-    sample["statusCode"] = "IN_TRANSIT"
-    sample["statusText"] = "In transit"
+    sample["statuses"] = sample["statuses"][:-1]  # newest is "received"
     return sample
 
 
@@ -59,7 +67,7 @@ async def test_update_merges_multiple_parcels(hass):
     )
     entry.add_to_hass(hass)
     client = AsyncMock()
-    client.async_get_parcel.side_effect = lambda code: (
+    client.async_get_parcel.side_effect = lambda code, token=None: (
         active_sample() if code == ACTIVE_CODE else delivered_sample()
     )
     coordinator = BurdCoordinator(hass, client, entry)
@@ -107,7 +115,7 @@ async def test_a_persisting_failure_warns_once_and_logs_recovery(hass, caplog):
     client = AsyncMock()
     failing = BurdApiError("HTTP 500")
 
-    async def _get(code):
+    async def _get(code, token=None):
         if code == ACTIVE_CODE and failing is not None:
             raise failing
         return _in_transit(code) if code == ACTIVE_CODE else delivered_sample()
@@ -160,27 +168,13 @@ async def test_update_skips_items_missing_a_tracking_code(hass):
     assert client.async_get_parcel.await_count == 1  # empty item never fetched
 
 
-async def test_update_backfills_missing_tracking_number(hass):
-    """An edge payload without a tracking number keeps the requested code."""
-    entry = _entry_with([{CONF_TRACKING_CODE: OTHER_CODE}])
-    entry.add_to_hass(hass)
-    sample = active_sample()
-    del sample["trackingNumber"]
-    client = AsyncMock()
-    client.async_get_parcel.return_value = sample
-    coordinator = BurdCoordinator(hass, client, entry)
-
-    data = await coordinator._async_update_data()
-    assert data[0]["barcode"] == OTHER_CODE
-
-
 async def test_update_prunes_cache_for_untracked_parcels(hass):
     entry = _entry_with([{CONF_TRACKING_CODE: DELIVERED_CODE}])
     entry.add_to_hass(hass)
     client = AsyncMock()
     client.async_get_parcel.return_value = delivered_sample()
     coordinator = BurdCoordinator(hass, client, entry)
-    coordinator._raw_cache["GONE"] = {"trackingNumber": "GONE"}
+    coordinator._raw_cache["GONE"] = {"number": "GONE"}
 
     await coordinator._async_update_data()
 
@@ -195,7 +189,7 @@ async def test_delivered_code_skipped_from_fetch(hass):
     )
     entry.add_to_hass(hass)
     client = AsyncMock()
-    client.async_get_parcel.side_effect = lambda code: (
+    client.async_get_parcel.side_effect = lambda code, token=None: (
         active_sample(code) if code == ACTIVE_CODE else delivered_sample()
     )
     coordinator = BurdCoordinator(hass, client, entry)
@@ -208,7 +202,7 @@ async def test_delivered_code_skipped_from_fetch(hass):
     data = await coordinator._async_update_data()
 
     # Only the still-active code is fetched — the delivered one is skipped.
-    client.async_get_parcel.assert_called_once_with(ACTIVE_CODE)
+    client.async_get_parcel.assert_called_once_with(ACTIVE_CODE, None)
     # The delivered parcel's sensor still keeps its data, from the cache.
     assert any(parcel["barcode"] == DELIVERED_CODE for parcel in coordinator.delivered)
     assert data[0]["barcode"] == ACTIVE_CODE
@@ -239,7 +233,7 @@ async def test_update_fetches_parcels_concurrently(hass):
     in_flight = 0
     peak = 0
 
-    async def _slow_fetch(code):
+    async def _slow_fetch(code, token=None):
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
@@ -376,7 +370,7 @@ async def test_no_events_for_parcel_first_seen_delivered(hass):
     entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
     entry.add_to_hass(hass)
     client = AsyncMock()
-    client.async_get_parcel.side_effect = lambda code: (
+    client.async_get_parcel.side_effect = lambda code, token=None: (
         active_sample(code) if code == ACTIVE_CODE else delivered_sample(code)
     )
     coordinator = BurdCoordinator(hass, client, entry)
@@ -425,7 +419,7 @@ async def test_fires_registered_event_for_new_parcel(hass):
             ],
         },
     )
-    client.async_get_parcel.side_effect = lambda code: active_sample(code)
+    client.async_get_parcel.side_effect = lambda code, token=None: active_sample(code)
     await coordinator._async_update_data()
     await hass.async_block_till_done()
 
@@ -448,17 +442,17 @@ async def test_fires_delivery_time_changed_event(hass):
     await coordinator._async_update_data()  # first refresh: suppressed
 
     moved = active_sample()
-    moved["estimatedDelivery"] = {
-        "from": "2026-04-29T16:00:00Z",
-        "to": "2026-04-29T18:00:00Z",
+    moved["timeWindow"] = {
+        "start": "2026-11-19T17:00:00Z",
+        "end": "2026-11-19T21:00:00Z",
     }
     client.async_get_parcel.return_value = moved
     await coordinator._async_update_data()
     await hass.async_block_till_done()
 
     assert len(events) == 1
-    assert events[0].data["old_planned_from"] == "2026-04-29T13:00:00Z"
-    assert events[0].data["new_planned_from"] == "2026-04-29T16:00:00Z"
+    assert events[0].data["old_planned_from"] == "2026-11-18T17:00:00+00:00"
+    assert events[0].data["new_planned_from"] == "2026-11-19T17:00:00+00:00"
 
 
 async def test_losing_the_eta_is_silent(hass):
@@ -477,7 +471,7 @@ async def test_losing_the_eta_is_silent(hass):
     await coordinator._async_update_data()
 
     dropped = active_sample()
-    dropped["estimatedDelivery"] = {"from": None, "to": None}
+    dropped["timeWindow"] = None
     client.async_get_parcel.return_value = dropped
     await coordinator._async_update_data()
     await hass.async_block_till_done()
@@ -500,13 +494,13 @@ async def test_a_parcel_the_delivered_list_leaves_out_still_fires_delivered(hass
     delivered = []
     hass.bus.async_listen(f"{DOMAIN}_parcel_delivered", lambda e: delivered.append(e))
 
-    client.async_get_parcel.side_effect = lambda code: active_sample(code)
+    client.async_get_parcel.side_effect = lambda code, token=None: active_sample(code)
     await coordinator._async_update_data()
 
     older = delivered_sample(ACTIVE_CODE)
     newer = delivered_sample(OTHER_CODE)
-    newer["deliveredAt"] = "2026-04-30T13:12:42Z"
-    client.async_get_parcel.side_effect = lambda code: (
+    newer["statuses"][-1]["created"] = "2026-11-18T19:00:00Z"
+    client.async_get_parcel.side_effect = lambda code, token=None: (
         older if code == ACTIVE_CODE else newer
     )
     await coordinator._async_update_data()
@@ -516,3 +510,108 @@ async def test_a_parcel_the_delivered_list_leaves_out_still_fires_delivered(hass
         [ACTIVE_CODE, OTHER_CODE]
     )
     assert [parcel["barcode"] for parcel in coordinator.delivered] == [OTHER_CODE]
+
+
+# ---------------------------------------------------------------------------
+# Min levering token and final statuses
+# ---------------------------------------------------------------------------
+
+
+async def test_token_is_passed_to_the_client_but_never_published(hass):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE, CONF_TOKEN: TOKEN}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    client.async_get_parcel.return_value = active_sample()
+    coordinator = BurdCoordinator(hass, client, entry)
+
+    data = await coordinator._async_update_data()
+
+    client.async_get_parcel.assert_awaited_once_with(ACTIVE_CODE, TOKEN)
+    assert TOKEN not in repr(data)
+
+
+def _final(code: str, final: str, created: str) -> dict:
+    sample = active_sample(code)
+    sample["statuses"] = [
+        status("registered", "2020-01-01T00:00:00Z", number=code),
+        status(final, created, number=code),
+    ]
+    return sample
+
+
+@pytest.mark.parametrize("final", ["canceled", "returnToSender"])
+async def test_final_status_stops_polling_after_the_grace_period(hass, final):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    long_ago = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+    client.async_get_parcel.return_value = _final(ACTIVE_CODE, final, long_ago)
+    coordinator = BurdCoordinator(hass, client, entry)
+
+    await coordinator._async_update_data()
+    assert coordinator.final_codes == {ACTIVE_CODE}
+    assert coordinator.update_interval is None
+
+    client.async_get_parcel.reset_mock()
+    data = await coordinator._async_update_data()
+    client.async_get_parcel.assert_not_awaited()
+    assert [parcel["barcode"] for parcel in data] == [ACTIVE_CODE]
+
+
+async def test_final_status_keeps_polling_within_the_grace_period(hass):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    just_now = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    client.async_get_parcel.return_value = _final(ACTIVE_CODE, "canceled", just_now)
+    coordinator = BurdCoordinator(hass, client, entry)
+
+    await coordinator._async_update_data()
+
+    assert coordinator.final_codes == set()
+    assert coordinator.update_interval is not None
+
+
+async def test_final_status_without_timestamp_counts_from_first_seen(hass):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    client.async_get_parcel.return_value = _final(ACTIVE_CODE, "canceled", "")
+    coordinator = BurdCoordinator(hass, client, entry)
+
+    await coordinator._async_update_data()
+    assert coordinator.final_codes == set()
+    assert ACTIVE_CODE in coordinator._final_seen
+
+    coordinator._final_seen[ACTIVE_CODE] = datetime.now(UTC) - timedelta(hours=25)
+    await coordinator._async_update_data()
+    assert coordinator.final_codes == {ACTIVE_CODE}
+
+
+async def test_a_corrected_final_status_resumes_normal_polling(hass):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    client.async_get_parcel.return_value = _final(ACTIVE_CODE, "canceled", "")
+    coordinator = BurdCoordinator(hass, client, entry)
+    await coordinator._async_update_data()
+
+    client.async_get_parcel.return_value = active_sample()
+    await coordinator._async_update_data()
+
+    assert coordinator._final_seen == {}
+
+
+async def test_final_codes_forgotten_when_untracked(hass):
+    entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
+    entry.add_to_hass(hass)
+    client = AsyncMock()
+    long_ago = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+    client.async_get_parcel.return_value = _final(ACTIVE_CODE, "canceled", long_ago)
+    coordinator = BurdCoordinator(hass, client, entry)
+    await coordinator._async_update_data()
+
+    hass.config_entries.async_update_entry(entry, options={CONF_PARCELS: []})
+    await coordinator._async_update_data()
+
+    assert coordinator.final_codes == set()

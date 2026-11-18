@@ -13,8 +13,8 @@
 # ---------------------------------------------------------------------------
 input_text:
   burd_new_parcel:
-    name: New Burd tracking code
-    max: 30
+    name: New Burd link or shipment number
+    max: 100
 
 # ---------------------------------------------------------------------------
 # 2) Script — reads the text field, tracks the parcel, then clears the field.

@@ -10,31 +10,23 @@ from homeassistant.core import HomeAssistant
 from . import BurdConfigEntry
 
 # Diagnostics are pasted into public issues, so redact anything that
-# identifies a person, an address or a specific parcel. Over-redacting is
-# cheap; under-redacting leaks a user's home address into a GitHub thread.
-#
-# TODO(carrier): add the carrier's own payload field names below. Walk one real
-# response and check every leaf — nested address blocks are the usual miss.
+# identifies a person, an address or a specific shipment — and the Min
+# levering token, which opens the recipient's details. Spelled exactly as
+# stored: the entry options, the canonical parcel and the raw dict api.py
+# assembles (which never holds the recipient's details in the first place).
 TO_REDACT = {
-    # canonical fields we publish ourselves
+    # entry options and canonical fields we publish ourselves
     "tracking_code",
+    "token",
     "barcode",
     "sender",
     "receiver",
     "url",
-    # carrier payload fields
-    "trackingNumber",
-    "recipient",
-    "deliveryAddress",
-    "address",
-    "postalCode",
-    "postal_code",
-    "city",
-    "street",
-    "email",
-    "name",
-    "driver",
-    "signature",
+    # raw dict
+    "number",
+    "companyName",
+    "orderNumber",
+    "customerId",
 }
 
 
@@ -49,7 +41,9 @@ async def async_get_config_entry_diagnostics(
         "counts": {
             "incoming_active": len(coordinator.data or []),
             "delivered": len(coordinator.delivered or []),
-            "skipped_from_fetch": len(coordinator.delivered_codes),
+            "skipped_from_fetch": len(
+                coordinator.delivered_codes | coordinator.final_codes
+            ),
         },
         "polling": {
             "tier_minutes": coordinator.current_tier_minutes,

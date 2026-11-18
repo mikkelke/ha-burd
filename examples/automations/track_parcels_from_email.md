@@ -80,13 +80,14 @@ Paste [`track_parcels_from_email.yaml`](track_parcels_from_email.yaml) and adapt
 
 ### Tracking-code formats
 
-The regex matches a prefix followed by alphanumerics:
+Two patterns, in this order:
 
 ```
-(?<![0-9A-Za-z])(?:EXAMPLE|EXA)[0-9A-Za-z]{6,}
+https://k[.]burd[.]dk/(?:f/)?[0-9A-Za-z_-]+
+(?<![0-9])[0-9]{18}(?![0-9])
 ```
 
-Two prefixes are covered: **`EXAMPLE…`** and **`EXA…`** — *TODO(carrier): replace these with the prefixes this carrier's codes actually use*. The integration itself accepts any code matching `^[A-Z0-9]{6,30}$`, but matching *that* broadly against e-mail text would hit every order number in the mail — so the example anchors on known prefixes instead. **If your mails carry a different prefix, add it to the alternation** (`(?:EXAMPLE|EXA|YOURPREFIX)`); the AI fallback will surface unknown formats in the meantime.
+The first is Burd's **Min levering link**, which is what you want: with it the integration also knows the evening Burd plans to deliver. The second is the 18-digit **shipment number**, matched only when the mail comes from Burd itself and holds no link, because webshop confirmations are full of other long numbers. The integration accepts either, plus the `https://burd.dk/track?code=…` link.
 
 ### Design notes
 
@@ -96,7 +97,7 @@ Two prefixes are covered: **`EXAMPLE…`** and **`EXA…`** — *TODO(carrier): 
 
 ## Pitfalls we hit so you don't have to
 
-1. **Jinja eats backslashes in string literals.** A template stored as `regex_findall('\bEXAMPLE…')` silently becomes a **backspace character** (`\b` is a string escape), so the regex never matches — no error anywhere. That's why the pattern is backslash-free: `(?<![0-9A-Za-z])` lookarounds instead of `\b`, `[0-9]` instead of `\d`. Copy that style if you add a prefix.
+1. **Jinja eats backslashes in string literals.** A template stored as `regex_findall('\b[0-9]{18}')` silently becomes a **backspace character** (`\b` is a string escape), so the regex never matches — no error anywhere. That's why the pattern is backslash-free: `(?<![0-9A-Za-z])` lookarounds instead of `\b`, `[0-9]` instead of `\d`. Copy that style if you add a pattern.
 2. **The `initial` event flag means the opposite of what you might expect.** In the IMAP integration `initial: true` = *first time this message is seen* (new mail); `false` = a duplicate trigger of the same message. So the condition must **require** `initial`, not exclude it.
 3. **Raise the max message size.** With the default the body is truncated before the tracking code appears in most carrier mails. `30000` is plenty.
 4. **Enable "text" in the event options.** Without it the event has headers only and there is nothing to extract.
@@ -109,8 +110,8 @@ Fire a fake event and watch the automation trace (Settings → Automations → y
 ```bash
 curl -X POST -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
   http://YOUR_HA:8123/api/events/imap_content \
-  -d '{"sender":"noreply@burdshipping.com","subject":"Your parcel is on its way",
-       "text":"Tracking code: EXAMPLE123456","initial":true,"folder":"INBOX","username":"test"}'
+  -d '{"sender":"noreply@burd.example","subject":"Your parcel is on its way",
+       "text":"Shipment number: 100000000000000001","initial":true,"folder":"INBOX","username":"test"}'
 ```
 
-Then `burd.untrack_parcel` the test code afterwards. For a full end-to-end test, forward a real shipping mail to the watched mailbox — it must arrive **unread**.
+Then `burd.untrack_parcel` the test number afterwards. For a full end-to-end test, forward a real shipping mail to the watched mailbox — it must arrive **unread**.

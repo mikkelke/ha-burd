@@ -7,15 +7,11 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.burd.api import BurdApiError
-from custom_components.burd.const import (
-    CONF_PARCELS,
-    CONF_TRACKING_CODE,
-    DOMAIN,
-)
+from custom_components.burd.const import CONF_PARCELS, CONF_TRACKING_CODE, DOMAIN
 
 from .payloads import ACTIVE_CODE, active_sample as _sample
 
-OTHER_CODE = "EXAMPLE222222"
+OTHER_CODE = "100000000000000003"
 
 
 async def test_setup_and_unload(hass):
@@ -67,9 +63,7 @@ async def test_setup_retries_when_first_refresh_fails(hass):
 
     with patch(
         "custom_components.burd.api.BurdApiClient.async_get_parcel",
-        new=AsyncMock(
-            side_effect=BurdApiError("Burd unreachable")
-        ),
+        new=AsyncMock(side_effect=BurdApiError("Burd unreachable")),
     ):
         assert not await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -132,7 +126,7 @@ async def test_options_update_applies_live_without_reload(hass):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-        mock.side_effect = lambda code: _sample(code)
+        mock.side_effect = lambda code, token=None: _sample(code)
         hass.config_entries.async_update_entry(
             entry,
             options={

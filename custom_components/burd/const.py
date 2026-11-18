@@ -36,24 +36,17 @@ KNOWN_CAPABILITIES = frozenset(
     {"weight", "dimensions", "delivery_window", "pickup_point", "url", "history"}
 )
 
-# TODO(carrier): trim this down to what the carrier's API actually exposes.
+# Every value not listed here comes back as a literal ``None`` from
+# normalize_parcel() in parcels.py. The docs site's carrier comparison table is
+# generated straight from this constant.
 #
-# Every value not listed here must come back as a literal ``None`` from
-# normalize_parcel() in parcels.py (or, for "history", CONF_INCLUDE_HISTORY
-# must not be wired to anything real) — never omit the key, just leave it
-# empty. The docs site's carrier comparison table is generated straight from
-# this constant, so drift here does not stay a local mistake, it becomes a
-# wrong claim on the website.
-#
-#   "weight"           parcel["weight"] is ever non-null
-#   "dimensions"        parcel["dimensions"] is ever non-null
-#   "delivery_window"   parcel["planned_from"] and/or ["planned_to"] is ever non-null
-#   "pickup_point"       parcel["pickup_point"] is ever non-null (beyond the "pickup" bool)
-#   "url"                parcel["url"] is ever non-null
-#   "history"            the include_history option is implemented and does something
-CAPABILITIES = frozenset(
-    {"weight", "dimensions", "delivery_window", "pickup_point", "url", "history"}
-)
+#   "weight"            never: Burd does not publish a weight
+#   "dimensions"        never: Burd does not publish dimensions
+#   "delivery_window"   pending: only with a Min levering link, see below
+#   "pickup_point"      never: Burd delivers to the door only
+#   "url"               the burd.dk tracking page for the number
+#   "history"           the status list arrives in the same response
+CAPABILITIES = frozenset({"url", "history"})
 
 # Fields whose support is not confirmed yet — typically a carrier built without
 # a real parcel to check against. Leave this empty once the open questions are
@@ -64,7 +57,7 @@ CAPABILITIES = frozenset(
 # into CAPABILITIES. A multi-backend carrier declares
 # PENDING_CAPABILITIES_BY_VARIANT with the same keys as its
 # CAPABILITIES_BY_VARIANT instead (omit backends with nothing pending).
-PENDING_CAPABILITIES: frozenset[str] = frozenset()
+PENDING_CAPABILITIES: frozenset[str] = frozenset({"delivery_window"})
 
 # If this carrier ever grows a second backend with a genuinely different
 # payload shape (a country-specific API, not just a config option), replace
@@ -82,24 +75,36 @@ PENDING_CAPABILITIES: frozenset[str] = frozenset()
 # preemptively: a single-backend carrier (the common case) keeps the flat
 # CAPABILITIES above.
 
-# TODO(carrier): point these at the real endpoints.
-#
-# ``TRACKING_API_URL`` is the consumer tracking endpoint the integration polls;
-# ``TRACKING_URL`` is the human-facing deep link surfaced on each parcel's
-# ``url`` field. Document what you know about the endpoint right here — auth,
-# rate limits, response content type, and how an unknown tracking code is
-# signalled. The next person to touch this file has no other source in this
-# repo — the full write-up lives in your own private research notes, not in
-# this repo.
-TRACKING_API_URL = "https://api.example-carrier.test/v1/track/{tracking_code}"
-TRACKING_URL = "https://example-carrier.test/track?code={tracking_code}"
+# Public, unauthenticated endpoints, the same ones burd.dk/track and the
+# recipient's "Min levering" page call. The status list is keyed on the
+# 18-digit shipment number and answers HTTP 400 with an empty body for a
+# number Burd does not know (yet). The labels are Burd's own text per status
+# type, per webshop and language. The Min levering endpoint is keyed on the
+# token from the recipient's link; it also returns the recipient's name,
+# address and contact details, which api.py drops before anything else sees
+# the reply. An unknown or expired token answers 200 without a barcode.
+STATUS_API_URL = (
+    "https://burdorderstatusapiprod.azurewebsites.net/api/TrackAndTraceStatuses"
+)
+LABELS_API_URL = (
+    "https://burdorderstatusapiprod.azurewebsites.net"
+    "/api/TrackAndTraceStatuses/Descriptions"
+)
+TOKEN_API_URL = (
+    "https://burduirescheduleapiprod.azurewebsites.net"
+    "/v1/Rescheduling/UIReschedulingInfo/{token}"
+)
+TRACKING_URL = "https://burd.dk/track?code={tracking_code}"
+MY_DELIVERY_URL = "https://k.burd.dk/f/{token}"
 
 # Tracked parcels live in the config entry options as a list of
-# ``{tracking_code}`` dicts — this carrier has no account or parcel feed, so the
-# user enters the codes themselves. Kept as dicts so future per-parcel fields
-# slot in without an options migration.
+# ``{tracking_code, token?}`` dicts. ``tracking_code`` is always the shipment
+# number; ``token`` is the Min levering token when the user pasted that link.
+# The token opens the recipient's personal details, so it never leaves the
+# entry options: not in ``raw``, attributes, events, logs or diagnostics.
 CONF_PARCELS = "parcels"
 CONF_TRACKING_CODE = "tracking_code"
+CONF_TOKEN = "token"
 
 # Delivered-parcels retention: keep delivered parcels visible for the last N
 # days, or keep only the N most recent — identical across the suite.
@@ -125,6 +130,11 @@ QUIET_WINDOW_END_HOUR = 6
 HOT_INTERVAL_MINUTES = 15
 MID_INTERVAL_MINUTES = 45
 HOT_LOOKAHEAD_HOURS = 1
+
+# A cancelled or returned shipment is final at Burd, but the status can still
+# be corrected shortly after. It keeps polling this long after that status was
+# set, then it is skipped from the fetch like a delivered one.
+FINAL_GRACE_HOURS = 24
 
 # Small, stable per-install offset added to every computed interval so
 # different installs don't all hit an anchor or tier boundary at the same

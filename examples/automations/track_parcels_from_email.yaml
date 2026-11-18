@@ -1,6 +1,6 @@
-# Extract Burd tracking codes from incoming e-mail and register them
-# with `burd.track_parcel`, so parcels start tracking the moment the
-# shipping confirmation lands in your inbox — no manual entry.
+# Extract Burd's Min levering link from incoming e-mail and register it
+# with `burd.track_parcel`, so parcels start tracking — delivery evening
+# included — the moment Burd's mail lands in your inbox.
 #
 # Requirements:
 #   - one or more core IMAP config entries with "text" enabled under
@@ -20,7 +20,7 @@
 alias: "Burd: track from e-mail"
 description: >-
   Listens to imap_content events from all IMAP entries. Fast regex path for
-  Burd tracking codes; optional AI fallback for mails whose layout the
+  Burd links and shipment numbers; optional AI fallback for mails whose layout the
   regex does not recognise.
 mode: queued
 max: 10
@@ -34,13 +34,17 @@ variables:
   subject: "{{ trigger.event.data.subject | default('') }}"
   body: "{{ trigger.event.data.text | default('') }}"
   content: "{{ subject ~ ' ' ~ body }}"
-  # Burd codes are prefix + alphanumerics. Two prefixes seen in the
-  # wild: EXAMPLE… and EXA… (the two prefixes this carrier uses; TODO(carrier): replace with the real ones seen in
-  # the integration's own service example). Add your own prefix to the
-  # alternation if you receive a different one.
-  burd_codes: >-
-    {{ content | regex_findall('(?<![0-9A-Za-z])(?:EXAMPLE|EXA)[0-9A-Za-z]{6,}')
+  # Burd's own mail links to the Min levering page, which also carries the
+  # planned delivery evening; prefer it. The 18-digit shipment number is
+  # only matched in mail from Burd itself, since webshop mails are full of
+  # other long numbers.
+  burd_links: >-
+    {{ content | regex_findall('https://k[.]burd[.]dk/(?:f/)?[0-9A-Za-z_-]+')
        | unique | list }}
+  burd_numbers: >-
+    {{ (content | regex_findall('(?<![0-9])[0-9]{18}(?![0-9])') | unique | list)
+       if 'burd' in sender and not burd_links else [] }}
+  burd_codes: "{{ burd_links + burd_numbers }}"
   # Keyword gate for the AI fallback — localise to your language(s).
   is_parcel_mail: >-
     {{ content | lower is search('package|shipped|out for delivery|track|shipment|delivery') }}
@@ -76,13 +80,12 @@ actions:
           task_name: burd-tracking-code-extraction
           entity_id: ai_task.your_ai_task_entity
           instructions: >-
-            Below is an e-mail. Determine whether it contains a Burd
-            parcel tracking code. Burd codes are
-            6-30 uppercase letters and digits, usually starting with a
-            prefix such as EXAMPLE or EXA. Only return a real tracking
-            trace code, never an order, customer or invoice number. If the
-            mail is from a different carrier, answer 'other'. When in
-            doubt: 'none'.
+            Below is an e-mail. Determine whether it is about a Burd
+            delivery and contains its Min levering link
+            (https://k.burd.dk/f/...) or its 18-digit shipment number.
+            Prefer the link. Never return an order, customer or invoice
+            number. If the mail is from a different carrier, answer
+            'other'. When in doubt: 'none'.
 
             Sender: {{ sender }}
             Subject: {{ subject }}
@@ -90,13 +93,13 @@ actions:
             {{ body[:6000] }}
           structure:
             carrier:
-              description: Whether a Burd tracking code was found
+              description: Whether a Burd link or shipment number was found
               required: true
               selector:
                 select:
                   options: ["burd", "other", "none"]
             tracking_code:
-              description: The tracking code, or empty if none
+              description: The Min levering link or shipment number, or empty if none
               required: false
               selector:
                 text:

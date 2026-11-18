@@ -48,19 +48,82 @@ you act in one of these areas:
 
 ## Carrier-specific notes
 
-> **TODO(carrier):** replace this whole section with the carrier's *integration*
-> decisions, then delete this note. Keep it HA-side: auth-error → HA-exception
-> mapping, cost-control caching, fields that are `None` on purpose (this is
-> prose context for a human — the machine-readable version a future carrier or
-> the docs site can trust is `const.py`'s `CAPABILITIES`, keep the two in
-> agreement), pickup/ETA quirks, and any live-verified caveat that changes
-> integration behaviour.
->
-> **API mechanics go in your own private research notes, NOT here and not in
-> a local `docs/api/`** — the endpoint(s) and what keys them, auth flow, rate
-> limits, response content type, the "unknown code" vs error signalling, the
-> status vocabulary and its `ParcelStatus` mapping, and the timestamp format.
-> See CONVENTIONS.md.
+Code-based, one shipment per tracked line, single hub. Pre-1.0: built from
+what Burd's own tracking pages read; no real shipment has been followed end
+to end yet, so every field shape is unconfirmed.
+
+**The token.** A tracked shipment is `{tracking_code, token?}` in the entry
+options; `tracking_code` is always the shipment number. The token comes from
+the recipient's Min levering link and opens their name, address, phone and
+e-mail (and lets anyone reschedule the delivery), so it is a code that opens
+something: it never reaches `raw`, attributes, events, logs or diagnostics
+(`token` is redacted). `api.py` reads only the barcode, `companyName` and
+`destination.timeWindow` from that reply and drops the rest before returning;
+a network error on that call is re-raised as `BurdApiError` carrying only the
+exception type, because aiohttp's message includes the URL and the token is a
+path segment. It is case-sensitive: `normalize_token` trims and never
+re-cases. Home Assistant records every service call's data, so the README
+says so instead of promising the link is nowhere. A token-less
+`track_parcel` for a number that is already tracked never drops a saved
+token; only an options-flow edit removes one.
+
+**Input.** `parse_tracking_input` takes the Min levering link
+(`k.burd.dk/f/<token>`, also `k.burd.dk/<token>` and its `confirmed`/`e/`
+routes), the burd.dk tracking link (`/track?code=<number>`),
+`NUMBER/TOKEN` (what the options form shows for a token line), a number, or
+a bare token. A token is looked up once before it is saved, to learn its
+number; an unknown or expired one is refused (`not_recognised`), and
+`NUMBER/TOKEN` must agree (`token_mismatch`). A number is never looked up:
+Burd answers "unknown" until the webshop registers the shipment, which is no
+reason to refuse it. A bare value that is not number-like is tried as a token
+and kept as a number when Burd does not know it as one, so a non-digit
+number still works. A saved token is answered from the options without a
+lookup (`async_resolve_known`), so editing and untracking keep working after
+the link expires.
+
+**Status.** The status is the newest entry by `created` (Burd's list order is
+not relied on); an unmapped newest type falls back to the newest one that
+maps, with a one-shot warning. Status types are compared case-insensitively
+(the list spells them camelCase, the labels endpoint PascalCase).
+`notReceived` (Burd did not get it from the webshop today) is `registered`,
+not `problem`: the shipment is simply not handed over yet. `receivedFlex`
+(moved to another evening) is `in_transit`. `deliveryFailed` and `canceled`
+are `problem`, `returnToSender` is `returning`. `raw_status` and history
+text are Burd's own label for the type from the labels endpoint, in Danish
+when Home Assistant runs in Danish and English otherwise, cached per webshop
+for the session (a failed labels call falls back to the type and is retried
+next poll). Timestamps are read as UTC; one without an offset is read as UTC
+and warned about once by field name.
+
+**One-shot WARNINGs (pre-1.0).** All go through `parcels.warn_once` with the
+issue-template link, field names and codes only: an unmapped status, a
+status-entry field outside `api.KNOWN_STATUS_KEYS` (the field is dropped
+from `raw`, so an unseen field such as a driver position never reaches the
+recorder), a status entry that is not an object, a `timeWindow` field other
+than `start`/`end` or a `timeWindow` that is not an object, a timestamp
+without an offset or one that does not parse, and a Min levering link that
+points at another shipment number (its window is then ignored).
+
+**Fields that are `None` on purpose** (agrees with `CAPABILITIES`):
+`receiver` (its only source is the Min levering reply, whose personal fields
+are never kept), `weight`, `dimensions`, `pickup_point` (Burd publishes
+none of them), and `pickup` is always `False`. `sender` is `companyName`
+from the Min levering reply, else the webshop id title-cased (`proshop` →
+`Proshop`, with a small override map in `parcels._SENDER_NAMES`).
+`planned_from`/`planned_to` are the Min levering `timeWindow` and stay in
+`PENDING_CAPABILITIES` until a real link shows one; they are cleared once
+the shipment is delivered, cancelled or returned. A shipment tracked by
+number alone has no window, so it polls on the hot tier as soon as it is out
+for delivery. `destinationType` is kept in `raw` and not interpreted.
+
+**No pickup-point summaries.** Burd delivers to the door, no status maps to
+`at_pickup_point` and `pickup` is never set, so this repo deliberately has
+neither `awaiting_pickup` nor `en_route_to_pickup_point`.
+
+**Out of scope on purpose:** rescheduling, delivery-placement and every other
+write the Min levering page offers, the proof-of-delivery photo, referral
+links, and address or contact entities. No outgoing direction: Burd has no
+consumer sending.
 
 ## Options and reloads
 
@@ -159,6 +222,11 @@ buckets on the sensor suffix and the event prefix. Also set
 
 ## Tracking-code validation
 
+This repo has no format regex either. Number-like input (digits, spaces,
+dashes) is stored as a number without a lookup; anything else is tried as a
+Min levering token first and kept as a number when Burd does not know it, so
+the token check never rejects a number.
+
 In code-based carriers (account-based sources have no code entry),
 `valid_tracking_code` in `config_flow.py` accepts every non-empty code — no
 format regex. This is a suite-wide convention, not a per-carrier TODO: real
@@ -211,6 +279,15 @@ backoff, delivered-skip) is spelled out below.
 A carrier that genuinely throttles or soft-bans traffic harder than the 429
 backoff handles is a documented, local divergence from this in that one
 repo's own `CLAUDE.md` — not a generator flag.
+
+**Local divergence: cancelled and returned shipments stop too.** A code whose
+newest status is `canceled` or `returnToSender` is skipped from the fetch
+like a delivered one once `FINAL_GRACE_HOURS` (24 h) have passed since Burd
+set that status (`coordinator._final_codes`; a status without a timestamp
+counts from when it was first seen, `_final_seen`). It is also left out of
+the tier, so it never keeps the hub polling on its own. The grace covers a
+status Burd corrects shortly after. Diagnostics count both sets under
+`skipped_from_fetch`.
 
 ## Module layout
 

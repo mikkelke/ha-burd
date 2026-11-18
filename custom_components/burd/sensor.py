@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import BurdConfigEntry
-from .const import DOMAIN, ParcelStatus
+from .const import DOMAIN
 from .coordinator import BurdCoordinator
 from .device import ATTRIBUTION, build_device_info
 from .parcels import parse_iso
@@ -53,8 +53,6 @@ async def async_setup_entry(
     non_parcel_unique_ids = {
         f"{entry_id}_incoming_parcels",
         f"{entry_id}_next_delivery",
-        f"{entry_id}_en_route_to_pickup_point",
-        f"{entry_id}_awaiting_pickup",
         f"{entry_id}_delivered_parcels",
         f"{entry_id}_last_update",
     }
@@ -78,17 +76,13 @@ async def async_setup_entry(
         for parcel in coordinator.data or []
     )
     entities.append(BurdNextDeliverySensor(coordinator, entry))
-    entities.append(BurdEnRouteToPickupPointSensor(coordinator, entry))
-    entities.append(BurdAwaitingPickupSensor(coordinator, entry))
     entities.append(BurdDeliveredParcelsSensor(coordinator, entry))
     entities.append(BurdLastUpdateSensor(coordinator, entry))
 
     async_add_entities(entities)
 
 
-class BurdIncomingParcelsSensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
+class BurdIncomingParcelsSensor(CoordinatorEntity[BurdCoordinator], SensorEntity):
     """Summary sensor: count of active (not-yet-delivered) tracked parcels.
 
     Spawns a per-parcel sensor for each new barcode and removes stale ones
@@ -153,9 +147,7 @@ class BurdIncomingParcelsSensor(
         super()._handle_coordinator_update()
 
 
-class BurdParcelSensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
+class BurdParcelSensor(CoordinatorEntity[BurdCoordinator], SensorEntity):
     """Per-parcel sensor reporting the status of one tracked Burd parcel."""
 
     _attr_has_entity_name = True
@@ -193,9 +185,7 @@ class BurdParcelSensor(
         return dict(parcel) if parcel else {}
 
 
-class BurdNextDeliverySensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
+class BurdNextDeliverySensor(CoordinatorEntity[BurdCoordinator], SensorEntity):
     """Earliest expected delivery datetime across all active parcels."""
 
     _attr_has_entity_name = True
@@ -203,9 +193,7 @@ class BurdNextDeliverySensor(
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_attribution = ATTRIBUTION
 
-    def __init__(
-        self, coordinator: BurdCoordinator, entry: ConfigEntry
-    ) -> None:
+    def __init__(self, coordinator: BurdCoordinator, entry: ConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_next_delivery"
@@ -244,68 +232,7 @@ class BurdNextDeliverySensor(
         }
 
 
-class _BurdPickupListSensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
-    """Base for the canonical pickup-point summary views."""
-
-    _attr_has_entity_name = True
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_attribution = ATTRIBUTION
-    _unrecorded_attributes = frozenset({"parcels"})
-    _suffix: str
-
-    def __init__(
-        self, coordinator: BurdCoordinator, entry: ConfigEntry
-    ) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{self._suffix}"
-        self._attr_device_info = build_device_info(entry)
-
-    @property
-    def native_value(self) -> int:
-        return len(self._parcels())
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {"parcels": self._parcels()}
-
-    def _parcels(self) -> list[dict]:
-        raise NotImplementedError
-
-
-class BurdEnRouteToPickupPointSensor(_BurdPickupListSensor):
-    """Active parcels destined for, but not yet at, a pickup point."""
-
-    _attr_translation_key = "en_route_to_pickup_point"
-    _suffix = "en_route_to_pickup_point"
-
-    def _parcels(self) -> list[dict]:
-        return [
-            parcel
-            for parcel in (self.coordinator.data or [])
-            if parcel.get("pickup")
-            and parcel.get("status") != ParcelStatus.AT_PICKUP_POINT
-        ]
-
-
-class BurdAwaitingPickupSensor(_BurdPickupListSensor):
-    """Active parcels that have arrived at a pickup point."""
-
-    _attr_translation_key = "awaiting_pickup"
-    _suffix = "awaiting_pickup"
-
-    def _parcels(self) -> list[dict]:
-        return [
-            parcel
-            for parcel in (self.coordinator.data or [])
-            if parcel.get("status") == ParcelStatus.AT_PICKUP_POINT
-        ]
-
-
-class BurdDeliveredParcelsSensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
+class BurdDeliveredParcelsSensor(CoordinatorEntity[BurdCoordinator], SensorEntity):
     """Recently delivered tracked Burd parcels."""
 
     _attr_has_entity_name = True
@@ -314,9 +241,7 @@ class BurdDeliveredParcelsSensor(
     _attr_attribution = ATTRIBUTION
     _unrecorded_attributes = frozenset({"parcels"})
 
-    def __init__(
-        self, coordinator: BurdCoordinator, entry: ConfigEntry
-    ) -> None:
+    def __init__(self, coordinator: BurdCoordinator, entry: ConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_delivered_parcels"
@@ -333,9 +258,7 @@ class BurdDeliveredParcelsSensor(
         return {"parcels": self.coordinator.delivered}
 
 
-class BurdLastUpdateSensor(
-    CoordinatorEntity[BurdCoordinator], SensorEntity
-):
+class BurdLastUpdateSensor(CoordinatorEntity[BurdCoordinator], SensorEntity):
     """Diagnostic sensor reporting when Burd was last polled successfully."""
 
     _attr_has_entity_name = True
@@ -344,9 +267,7 @@ class BurdLastUpdateSensor(
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_attribution = ATTRIBUTION
 
-    def __init__(
-        self, coordinator: BurdCoordinator, entry: ConfigEntry
-    ) -> None:
+    def __init__(self, coordinator: BurdCoordinator, entry: ConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_last_update"

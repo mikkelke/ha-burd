@@ -32,12 +32,10 @@ class BurdData:
 type BurdConfigEntry = ConfigEntry[BurdData]
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: BurdConfigEntry
-) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: BurdConfigEntry) -> bool:
     """Set up Burd from a config entry."""
     # No auth: Burd tracking is public, so the HA-managed session is fine.
-    client = BurdApiClient(async_get_clientsession(hass))
+    client = BurdApiClient(async_get_clientsession(hass), hass.config.language)
     coordinator = BurdCoordinator(hass, client, entry)
 
     # Fetch initial data here, before forwarding to platforms. Raising
@@ -66,9 +64,7 @@ async def async_setup_entry(
     return True
 
 
-async def _async_options_updated(
-    hass: HomeAssistant, entry: BurdConfigEntry
-) -> None:
+async def _async_options_updated(hass: HomeAssistant, entry: BurdConfigEntry) -> None:
     """Apply changed options by refreshing the coordinator.
 
     Home Assistant notifies an update listener on *every* ``async_update_entry``,
@@ -85,9 +81,7 @@ async def _async_options_updated(
     await data.coordinator.async_request_refresh()
 
 
-async def async_unload_entry(
-    hass: HomeAssistant, entry: BurdConfigEntry
-) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: BurdConfigEntry) -> bool:
     """Unload the Burd config entry."""
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False

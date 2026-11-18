@@ -186,7 +186,9 @@ async def test_update_interval_resumes_once_a_parcel_is_added(hass):
         entry,
         options={**entry.options, CONF_PARCELS: [{CONF_TRACKING_CODE: ACTIVE_CODE}]},
     )
-    client.async_get_parcel.return_value = active_sample()
+    out_for_delivery = active_sample()
+    out_for_delivery["timeWindow"] = None  # no window: hot as soon as it is out
+    client.async_get_parcel.return_value = out_for_delivery
     await coordinator._async_update_data()
 
     assert coordinator.update_interval is not None
@@ -230,9 +232,7 @@ async def test_failed_poll_drops_the_overnight_interval(hass):
     entry = _entry_with([{CONF_TRACKING_CODE: ACTIVE_CODE}])
     entry.add_to_hass(hass)
     client = AsyncMock()
-    client.async_get_parcel.side_effect = BurdApiError(
-        "HTTP 500", status_code=500
-    )
+    client.async_get_parcel.side_effect = BurdApiError("HTTP 500", status_code=500)
     coordinator = BurdCoordinator(hass, client, entry)
     coordinator.update_interval = timedelta(hours=5, minutes=40)
 

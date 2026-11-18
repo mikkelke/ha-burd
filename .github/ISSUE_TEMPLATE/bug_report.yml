@@ -3,7 +3,7 @@ description: Report a bug in the Burd integration
 title: "[Bug]: "
 labels: ["bug"]
 assignees:
-  - peter-mdf
+  - mikkelke
 body:
   - type: markdown
     attributes:

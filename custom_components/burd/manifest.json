@@ -5,13 +5,13 @@
     "productivity_information"
   ],
   "codeowners": [
-    "@peter-mdf"
+    "@mikkelke"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/ha-parcel-integrations/ha-burd",
+  "documentation": "https://github.com/mikkelke/ha-burd",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/ha-parcel-integrations/ha-burd/issues",
+  "issue_tracker": "https://github.com/mikkelke/ha-burd/issues",
   "quality_scale": "silver",
   "requirements": [],
   "single_config_entry": true,

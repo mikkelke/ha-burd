@@ -2,7 +2,7 @@ track_parcel:
   fields:
     tracking_code:
       required: true
-      example: "EXAMPLE123456"
+      example: "https://k.burd.dk/f/AbC123dEf456"
       selector:
         text:
 
@@ -10,6 +10,6 @@ untrack_parcel:
   fields:
     tracking_code:
       required: true
-      example: "EXAMPLE123456"
+      example: "123456789012345678"
       selector:
         text:

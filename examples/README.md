@@ -9,7 +9,7 @@ Ready-to-paste Home Assistant snippets for the Burd integration.
 
 All examples assume a single Burd hub. Adjust entity IDs to match yours.
 
-**Feeding Burd from e-mail:** Burd is code-based — every parcel must be registered by its tracking code before it can be tracked. [`automations/track_parcels_from_email.yaml`](automations/track_parcels_from_email.yaml) extracts tracking codes from incoming shipping mails (core IMAP integration + regex, with an optional AI fallback) and registers them automatically; setup guide and pitfalls in [`automations/track_parcels_from_email.md`](automations/track_parcels_from_email.md).
+**Feeding Burd from e-mail:** Burd is code-based — every parcel must be registered by its Min levering link or shipment number before it can be tracked. [`automations/track_parcels_from_email.yaml`](automations/track_parcels_from_email.yaml) extracts them from Burd's mails (core IMAP integration + regex, with an optional AI fallback) and registers them automatically; setup guide and pitfalls in [`automations/track_parcels_from_email.md`](automations/track_parcels_from_email.md).
 
 ## Services
 

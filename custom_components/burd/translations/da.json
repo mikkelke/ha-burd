@@ -1,0 +1,152 @@
+{
+  "title": "Burd",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Opsæt Burd",
+        "description": "Sporing hos Burd kræver ingen konto — hubben oprettes med det samme. Tilføj forsendelser bagefter via integrationens indstillinger eller tjenesten `burd.track_parcel`."
+      }
+    },
+    "abort": {
+      "already_configured": "Burd er allerede sat op."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Burd-indstillinger",
+        "menu_options": {
+          "parcels": "Pakker",
+          "settings": "Indstillinger"
+        },
+        "sections": {
+          "parcels": {
+            "name": "Pakker",
+            "data": {
+              "add": "Tilføj en pakke",
+              "remove": "Fjern pakker"
+            },
+            "data_description": {
+              "add": "Indsæt Min levering-linket fra Burds sms eller e-mail, eller indtast det 18-cifrede forsendelsesnummer."
+            }
+          },
+          "delivered": {
+            "name": "Leverede pakker",
+            "data": {
+              "delivered_filter_type": "Filtrer efter",
+              "delivered_filter_amount": "Antal"
+            },
+            "data_description": {
+              "delivered_filter_type": "Vis leverede pakker fra de sidste X dage, eller begræns til de X seneste.",
+              "delivered_filter_amount": "Antal dage eller pakker der skal vises."
+            }
+          },
+          "history": {
+            "name": "Pakkehistorik",
+            "data": {
+              "include_history": "Inkluder statushistorik"
+            },
+            "data_description": {
+              "include_history": "Tilføj en historikattribut pr. pakke, der viser hver statusopdatering (tidsstempel, status, originaltekst). Slået fra som standard."
+            }
+          }
+        }
+      },
+      "parcels": {
+        "title": "Administrer pakker",
+        "description": "Én forsendelse pr. linje. Indsæt Min levering-linket (https://k.burd.dk/f/…) fra Burds sms eller e-mail, eller indtast det 18-cifrede forsendelsesnummer. Med linket viser integrationen også, hvilken aften Burd planlægger at levere; med nummeret alene kun status.",
+        "data": {
+          "tracking_codes": "Links eller forsendelsesnumre"
+        },
+        "data_description": {
+          "tracking_codes": "Et Min levering-link, et sporingslink fra burd.dk, NUMMER/TOKEN eller et forsendelsesnummer."
+        }
+      },
+      "settings": {
+        "title": "Indstillinger",
+        "data": {
+          "delivered_filter_type": "Leverede pakker: filtrer efter",
+          "delivered_filter_amount": "Leverede pakker: antal",
+          "include_history": "Inkluder statushistorik"
+        }
+      }
+    },
+    "error": {
+      "invalid_tracking_code": "Det ligner ikke et forsendelsesnummer eller link fra Burd.",
+      "unsupported_link": "Kun Min levering-linket (https://k.burd.dk/f/…) og sporingslinket fra burd.dk understøttes.",
+      "not_recognised": "Burd genkender ikke det Min levering-link. Det kan være udløbet; indtast forsendelsesnummeret i stedet.",
+      "token_mismatch": "Det Min levering-link hører til et andet forsendelsesnummer.",
+      "cannot_connect": "Kunne ikke få forbindelse til Burd. Prøv igen senere.",
+      "already_tracked": "Den pakke spores allerede."
+    }
+  },
+  "selector": {
+    "delivered_filter_type": {
+      "options": {
+        "days": "Dage",
+        "parcels": "Antal pakker"
+      }
+    }
+  },
+  "services": {
+    "track_parcel": {
+      "name": "Spor pakke",
+      "description": "Begynd at spore en forsendelse fra Burd via Min levering-linket eller forsendelsesnummeret.",
+      "fields": {
+        "tracking_code": {
+          "name": "Link eller forsendelsesnummer",
+          "description": "Min levering-linket fra Burds besked, eller det 18-cifrede forsendelsesnummer. Home Assistant gemmer dataene fra hvert tjenestekald, også linket; tilføj pakken via integrationens indstillinger, hvis du ikke ønsker det."
+        }
+      }
+    },
+    "untrack_parcel": {
+      "name": "Stop sporing af pakke",
+      "description": "Stop med at spore en forsendelse fra Burd via Min levering-linket eller forsendelsesnummeret.",
+      "fields": {
+        "tracking_code": {
+          "name": "Link eller forsendelsesnummer",
+          "description": "Min levering-linket eller forsendelsesnummeret, der ikke længere skal spores."
+        }
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "parcel_registered": "En pakke blev registreret",
+      "parcel_status_changed": "En pakkes status ændrede sig",
+      "parcel_delivered": "En pakke blev leveret",
+      "parcel_delivery_time_changed": "En pakkes forventede leveringstid ændrede sig"
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh": {
+        "name": "Opdater"
+      }
+    },
+    "calendar": {
+      "deliveries": {
+        "name": "Leveringer"
+      }
+    },
+    "sensor": {
+      "incoming_parcels": {
+        "name": "Indkommende pakker",
+        "unit_of_measurement": "pakker"
+      },
+      "next_delivery": {
+        "name": "Næste levering"
+      },
+      "delivered_parcels": {
+        "name": "Leverede pakker",
+        "unit_of_measurement": "pakker"
+      },
+      "last_update": {
+        "name": "Sidste vellykkede opdatering"
+      },
+      "parcel": {
+        "name": "Pakke {barcode}"
+      }
+    }
+  }
+}

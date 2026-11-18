@@ -5,9 +5,7 @@ from unittest.mock import MagicMock
 
 from custom_components.burd.const import ParcelStatus
 from custom_components.burd.sensor import (
-    BurdAwaitingPickupSensor,
     BurdDeliveredParcelsSensor,
-    BurdEnRouteToPickupPointSensor,
     BurdIncomingParcelsSensor,
     BurdLastUpdateSensor,
     BurdNextDeliverySensor,
@@ -47,9 +45,7 @@ def _parcel(
 
 def test_incoming_counts_and_lists():
     coordinator = _coordinator([_parcel("A"), _parcel("B")])
-    sensor = BurdIncomingParcelsSensor(
-        coordinator, _entry(), lambda _: None, set()
-    )
+    sensor = BurdIncomingParcelsSensor(coordinator, _entry(), lambda _: None, set())
     assert sensor.native_value == 2
     assert len(sensor.extra_state_attributes["parcels"]) == 2
 
@@ -94,36 +90,6 @@ def test_next_delivery_skips_unparseable_moment():
     )
     sensor = BurdNextDeliverySensor(coordinator, _entry())
     assert sensor.extra_state_attributes["barcode"] == "B"
-
-
-def test_en_route_and_awaiting_pickup_split():
-    parcels = [
-        _parcel("EN_ROUTE", pickup=True),
-        _parcel("READY", pickup=True, status=ParcelStatus.AT_PICKUP_POINT),
-        _parcel("HOME"),
-    ]
-    en_route = BurdEnRouteToPickupPointSensor(_coordinator(parcels), _entry())
-    awaiting = BurdAwaitingPickupSensor(_coordinator(parcels), _entry())
-    assert en_route.unique_id == "e1_en_route_to_pickup_point"
-    assert awaiting.unique_id == "e1_awaiting_pickup"
-    assert [p["barcode"] for p in en_route.extra_state_attributes["parcels"]] == [
-        "EN_ROUTE"
-    ]
-    assert [p["barcode"] for p in awaiting.extra_state_attributes["parcels"]] == [
-        "READY"
-    ]
-    assert en_route.native_value == 1
-    assert awaiting.native_value == 1
-
-
-def test_pickup_sensors_zero_without_data():
-    coordinator = _coordinator([])
-    coordinator.data = None
-    assert (
-        BurdEnRouteToPickupPointSensor(coordinator, _entry()).native_value
-        == 0
-    )
-    assert BurdAwaitingPickupSensor(coordinator, _entry()).native_value == 0
 
 
 def test_delivered_sensor():

@@ -1,7 +1,7 @@
 # Burd Parcel Tracker
 
-[![Release](https://img.shields.io/github/v/release/ha-parcel-integrations/ha-burd.svg)](https://github.com/ha-parcel-integrations/ha-burd/releases)
-[![Downloads](https://img.shields.io/github/downloads/ha-parcel-integrations/ha-burd/total.svg)](https://github.com/ha-parcel-integrations/ha-burd/releases)
+[![Release](https://img.shields.io/github/v/release/mikkelke/ha-burd.svg)](https://github.com/mikkelke/ha-burd/releases)
+[![Downloads](https://img.shields.io/github/downloads/mikkelke/ha-burd/total.svg)](https://github.com/mikkelke/ha-burd/releases)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Custom-41BDF5.svg)](https://hacs.xyz)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -9,9 +9,9 @@
 >
 > 💬 Questions or feedback? Join the discussion on the [Home Assistant community](https://community.home-assistant.io/t/packages-postnl-dhl-nl-dpd-and-gls-parcel-integration/112433/).
 
-<!-- TODO(carrier): rewrite this paragraph, the Requirements and the Disclaimer for the real carrier — country, what a user needs, and whether an account is involved. -->
+A custom Home Assistant integration that tracks your [Burd](https://burd.dk) evening deliveries in Denmark. No account is needed: paste the Min levering link from the text message or e-mail Burd sends you, or enter the 18-digit shipment number.
 
-A custom Home Assistant integration that tracks your [Burd](https://example-carrier.test) parcels. No account is needed — you enter the tracking code yourself, just like on the Burd website.
+> ⚠️ **Pre-1.0 release.** Built from what Burd's own tracking pages read; no real shipment has been followed from registration to delivery yet. Anything the integration does not recognise — a status, a new field, a timestamp without a time zone, or a Min levering link for another shipment — logs one `WARNING` with a ready-made issue link instead of failing silently. Please [report it](https://github.com/mikkelke/ha-burd/issues/new?template=unrecognised_status.yml) when you see one.
 
 ## Contents
 
@@ -35,8 +35,9 @@ A custom Home Assistant integration that tracks your [Burd](https://example-carr
 
 ## Features
 
-- Track any number of Burd parcels by tracking code — no account needed
-- Per-parcel sensor with the canonical status (`registered` / `in_transit` / `out_for_delivery` / `delivered` / …), the carrier's own status text, the expected delivery window and a tracking deep-link
+- Track any number of Burd shipments by Min levering link or shipment number — no account needed
+- Per-parcel sensor with the canonical status (`registered` / `in_transit` / `out_for_delivery` / `delivered` / …), Burd's own status text (Danish when Home Assistant runs in Danish, English otherwise), the webshop that sent it and a link to Burd's tracking page
+- With the Min levering link: the evening Burd plans to deliver, as the parcel's delivery window
 - Summary sensors: incoming parcels, next delivery, recently delivered parcels
 - Read-only **Deliveries** calendar with the expected delivery windows
 - `burd.track_parcel` / `burd.untrack_parcel` services, so a dashboard button can add a parcel
@@ -47,8 +48,7 @@ A custom Home Assistant integration that tracks your [Burd](https://example-carr
 ## Requirements
 
 - Home Assistant 2025.12 or newer
-- A Burd parcel and its tracking code (from the shipping
-  confirmation email or the missed-delivery card) — no account needed
+- A Burd shipment and its Min levering link (`https://k.burd.dk/f/…`) from Burd's text message or e-mail, or its 18-digit shipment number — no account needed
 
 ## Installation
 
@@ -56,9 +56,9 @@ A custom Home Assistant integration that tracks your [Burd](https://example-carr
 
 Click the button below to open this repository in the Marketplace, then install **Burd**:
 
-[![Open your Home Assistant instance and open a repository inside the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ha-parcel-integrations&repository=ha-burd&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=mikkelke&repository=ha-burd&category=integration)
 
-Or add it by hand: in the Marketplace, choose the three-dot menu → **Custom repositories**, add `https://github.com/ha-parcel-integrations/ha-burd` as an **Integration** and install **Burd**.
+Or add it by hand: in the Marketplace, choose the three-dot menu → **Custom repositories**, add `https://github.com/mikkelke/ha-burd` as an **Integration** and install **Burd**.
 
 Restart Home Assistant if it asks you to.
 
@@ -72,7 +72,17 @@ Copy `custom_components/burd` into your `config/custom_components/` folder and r
 
 Add the integration via **Settings → Devices & Services → Add Integration → Burd**. There is nothing to fill in: the hub is created immediately (Burd tracking needs no account).
 
-Then add parcels via the integration's **Configure** dialog, the [`burd.track_parcel`](#services) service, or a [dashboard button](examples/dashboards/add_parcel_card.yaml). The tracking code is on your shipping confirmation email or the missed-delivery card.
+Then add parcels via the integration's **Configure** dialog, the [`burd.track_parcel`](#services) service, or a [dashboard button](examples/dashboards/add_parcel_card.yaml). Each line takes:
+
+| You paste | What you get |
+|---|---|
+| The Min levering link, `https://k.burd.dk/f/<token>` | Status, history and the planned delivery evening |
+| The burd.dk tracking link, `https://burd.dk/track?code=<number>` | Status and history |
+| The 18-digit shipment number | Status and history |
+
+The Min levering link is looked up once when you add it, to learn its shipment number; a link Burd does not recognise (for example one that has expired) is refused, and you can enter the shipment number instead. A shipment number is never looked up first: Burd only knows it once the webshop has registered the shipment, until then it shows as `unknown`.
+
+The link carries a token that opens your Min levering page, with your name, address and phone number. The integration stores it in its own options and uses it only to read the delivery window; it never appears in sensor attributes, events, logs or diagnostics. Home Assistant itself records the data of every service call, so a link passed to `burd.track_parcel` ends up in its database and automation traces too; add the parcel in the **Configure** dialog if you do not want that.
 
 ## Options
 
@@ -80,7 +90,7 @@ Open **Configure** on the integration entry:
 
 | Section | Option | Default | Description |
 |---|---|---|---|
-| Parcels | Add / remove | — | Manage the tracked tracking codes. Changes apply immediately, no restart. |
+| Parcels | Add / remove | — | Manage the tracked shipments, one per line. A shipment added by link shows as `NUMBER/TOKEN`. Changes apply immediately, no restart. |
 | Delivered parcels | Filter by / amount | last 7 days | How long delivered parcels stay visible on the delivered sensor. |
 | Parcel history | Include status history | off | Adds a `history` attribute per parcel with each status update. |
 
@@ -97,15 +107,14 @@ what your tracked parcels are actually doing:
   AM), so an overnight update is never missed.
 - **Hot (every 15 minutes)** — while any tracked parcel is out for delivery
   today, starting an hour before its delivery window opens (or immediately if
-  no window is known yet).
+  no window is known yet, which is the case for a parcel added by number).
 - **Normal (every 45 minutes)** — for anything else still on its way.
 - **Fully paused** — once every tracked parcel has been delivered, or nothing
   is tracked at all, polling stops until you add a parcel back (adding one
-  always triggers an immediate check, regardless of the pause).
+  always triggers an immediate check, regardless of the pause). A cancelled or
+  returned shipment counts as finished 24 hours after Burd set that status.
 - A small, fixed per-hub offset is added on top, so not every Burd
   hub out there polls at exactly the same second.
-
-<!-- TODO(carrier): if this carrier's polling diverges from the schedule above (e.g. no delivery window at all, so it always falls into the hot-tier fallback), say so explicitly here — see CLAUDE.md's "Dynamic polling" section for this carrier's specifics. -->
 
 ## Removal
 
@@ -118,33 +127,29 @@ Standard HA removal applies: **Settings → Devices & Services → Burd → ⋮ 
 | `sensor.burd_incoming_parcels` | Number of active tracked parcels, full list under the `parcels` attribute |
 | `sensor.burd_parcel_<code>` | One per tracked parcel; state is the canonical status, attributes carry the full normalised parcel |
 | `sensor.burd_next_delivery` | Earliest expected delivery moment across all active parcels |
-| `sensor.burd_en_route_to_pickup_point` | Incoming parcels on their way to a pickup point that have not arrived yet |
-| `sensor.burd_awaiting_pickup` | Incoming parcels that are ready to collect at a pickup point |
 | `sensor.burd_delivered_parcels` | Recently delivered parcels (see the retention option) |
 | `calendar.burd_deliveries` | Read-only calendar of expected deliveries, no extra API calls |
 | `sensor.burd_last_successful_update` | Diagnostic: when Burd was last polled successfully |
 
-A delivered parcel moves from its per-parcel sensor to the delivered sensor automatically.
+A delivered parcel moves from its per-parcel sensor to the delivered sensor automatically. Burd delivers to your door, so there are no pickup-point sensors.
 
 ## Parcel status reference
 
 The `status` field is the carrier-agnostic enum shared by the whole integration family:
 
-<!-- TODO(carrier): trim this table to the statuses this carrier can actually
-     report — listing states that never occur just confuses users. -->
-
 | Status | Meaning |
 |---|---|
-| `registered` | Announced / received by Burd |
-| `in_transit` | In the sorting network |
-| `out_for_delivery` | With the courier today |
-| `at_pickup_point` | Waiting for you at a pickup location |
+| `registered` | The webshop has announced it and Burd does not have it yet, also when Burd expected it today but did not get it |
+| `in_transit` | At Burd's terminal, also when the delivery has been moved to another evening |
+| `out_for_delivery` | With the courier this evening |
 | `delivered` | Delivered |
-| `returning` | Going back to the sender |
-| `problem` | Burd reports an exception |
-| `unknown` | Not yet scanned, or a status we have not mapped yet |
+| `problem` | Not delivered (Burd tries again within two working days before returning it), or the delivery was cancelled |
+| `returning` | Going back to the webshop |
+| `unknown` | Burd does not know the number yet, or a status we have not mapped yet |
 
-The carrier's own human-readable text is always available as `raw_status`.
+`at_pickup_point` is never reported: Burd delivers to your door.
+
+Burd's own text for the status is always available as `raw_status`, as Burd writes it.
 
 ## Events
 
@@ -163,8 +168,8 @@ Every payload is the full normalised parcel plus the hub's `device_id`. Events a
 
 | Service | Fields | Description |
 |---|---|---|
-| `burd.track_parcel` | `tracking_code` | Start tracking a parcel |
-| `burd.untrack_parcel` | `tracking_code` | Stop tracking a parcel |
+| `burd.track_parcel` | `tracking_code` | Start tracking a shipment; takes the Min levering link, the burd.dk tracking link or the shipment number |
+| `burd.untrack_parcel` | `tracking_code` | Stop tracking a shipment; takes the same forms |
 
 ## Examples
 
@@ -187,8 +192,9 @@ logger:
 
 ## Troubleshooting
 
-- **A parcel shows `unknown`** — Burd has not scanned it yet (their API answers `not_found` until the first scan), or the code is wrong. It will pick up automatically once scanned.
-- **A status logs "Unrecognised Burd status"** — please [open an issue](https://github.com/ha-parcel-integrations/ha-burd/issues/new?template=unrecognised_status.yml) with the logged line so the mapping can be extended.
+- **A parcel shows `unknown`** — Burd does not know the number yet (the webshop has not registered the shipment), or the number is wrong. It picks up automatically once Burd has it. A parcel coming from abroad can only be tracked once Burd has received it.
+- **No delivery window** — only a parcel added by its Min levering link has one. Re-add it with the link to get it.
+- **The log says "Unrecognised Burd data"** — please [open an issue](https://github.com/mikkelke/ha-burd/issues/new?template=unrecognised_status.yml) with the logged line so the integration can handle it.
 
 ## Related integrations
 
@@ -208,7 +214,7 @@ All third-party trademarks, trade names, product names, logos, and other brand a
 
 This integration may rely on public, unofficial, or undocumented carrier interfaces, accessed with your own account or API key where required. These may change or be withdrawn without notice and may be subject to Burd's terms. Data is sent only to Burd's own services or those of its group; this project operates no servers of its own. You are responsible for ensuring that your use complies with applicable law and those terms. Use is at your own risk; see the [licence](LICENSE) for warranty limitations.
 
-This integration uses the same public tracking endpoint as the Burd consumer website.
+This integration uses the same public tracking endpoints as Burd's own tracking page and Min levering page.
 
 ## Contributing
 

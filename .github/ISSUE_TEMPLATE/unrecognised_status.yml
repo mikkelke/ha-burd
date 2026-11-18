@@ -3,7 +3,7 @@ description: The integration logged a warning asking you to report an unrecognis
 title: "[status] "
 labels: ["unrecognised-status"]
 assignees:
-  - peter-mdf
+  - mikkelke
 body:
   - type: markdown
     attributes:
@@ -11,7 +11,7 @@ body:
         The integration logs a warning such as
 
         ```
-        Unrecognised Burd status — help us map it. Open an issue
+        Unrecognised Burd data — help us handle it. Open an issue
         and paste this line: …
           status=… → reported as 'unknown'
         ```
@@ -21,7 +21,7 @@ body:
     id: logline
     attributes:
       label: The log line
-      description: Copy the full "help us map it" warning line from your Home Assistant log.
+      description: Copy the full "help us handle it" warning line from your Home Assistant log.
       render: text
     validations:
       required: true

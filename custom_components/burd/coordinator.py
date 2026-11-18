@@ -23,9 +23,11 @@ from .api import BurdApiClient, BurdApiError
 from .const import (
     CONF_INCLUDE_HISTORY,
     CONF_PARCELS,
+    CONF_TOKEN,
     CONF_TRACKING_CODE,
     DEFAULT_INCLUDE_HISTORY,
     DOMAIN,
+    FINAL_GRACE_HOURS,
     HOT_INTERVAL_MINUTES,
     HOT_LOOKAHEAD_HOURS,
     MID_INTERVAL_MINUTES,
@@ -34,7 +36,13 @@ from .const import (
     STAGGER_MINUTES,
     ParcelStatus,
 )
-from .parcels import apply_delivered_filter, normalize_parcel, sort_parcels_by_ts
+from .parcels import (
+    apply_delivered_filter,
+    is_final,
+    normalize_parcel,
+    parse_iso,
+    sort_parcels_by_ts,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -123,7 +131,8 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
     """Polls each tracked parcel and publishes the canonical parcel lists.
 
     This carrier has no account or parcel feed, so the tracked parcels are the
-    tracking codes the user entered (stored in the entry options). Each is
+    shipment numbers the user entered (stored in the entry options), each
+    with the Min levering token when it was added by that link. Each is
     fetched individually and merged into one list; ``coordinator.data`` is the
     active (not-yet-delivered) parcels, ``self.delivered`` the rest.
     """
@@ -162,6 +171,12 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
         # not the barcode (a never-scanned parcel has no barcode). Lives for
         # the integration's lifetime (resets on restart).
         self._delivered_codes: set[str] = set()
+        # Codes whose newest status is cancelled or returned and older than
+        # FINAL_GRACE_HOURS: skipped from the fetch like delivered ones, and
+        # left out of the polling tier so they never keep polling on their
+        # own. ``_final_seen`` stands in for a status without a timestamp.
+        self._final_codes: set[str] = set()
+        self._final_seen: dict[str, datetime] = {}
         # Codes whose last fetch failed, so a failure that persists poll after
         # poll is logged once (and its recovery once) instead of every cycle.
         self._failing_codes: set[str] = set()
@@ -193,8 +208,13 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
 
     @property
     def delivered_codes(self) -> set[str]:
-        """Tracking codes currently skipped from the fetch (diagnostics only)."""
+        """Delivered codes currently skipped from the fetch (diagnostics only)."""
         return self._delivered_codes
+
+    @property
+    def final_codes(self) -> set[str]:
+        """Cancelled or returned codes past their grace period (diagnostics only)."""
+        return self._final_codes
 
     def _device_id(self) -> str | None:
         """Resolve (and cache) this entry's device id for event payloads."""
@@ -211,13 +231,13 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
             self._cached_device_id = device.id
         return self._cached_device_id
 
-    def _tracked(self) -> list[str]:
-        """Return the configured tracking codes."""
-        return [
-            item[CONF_TRACKING_CODE]
+    def _tracked(self) -> dict[str, str | None]:
+        """Return the configured shipment numbers, each with its token (if any)."""
+        return {
+            item[CONF_TRACKING_CODE]: item.get(CONF_TOKEN) or None
             for item in self.config_entry.options.get(CONF_PARCELS, [])
             if item.get(CONF_TRACKING_CODE)
-        ]
+        }
 
     @property
     def _include_history(self) -> bool:
@@ -243,7 +263,8 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
 
     async def _async_poll(self) -> list[dict]:
         """Fetch every tracked parcel and split into active vs delivered."""
-        codes = self._tracked()
+        tokens = self._tracked()
+        codes = list(tokens)
 
         # Drop cache entries for parcels the user no longer follows, so the
         # cache stays bounded.
@@ -252,15 +273,25 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
             code: raw for code, raw in self._raw_cache.items() if code in tracked_codes
         }
         self._delivered_codes &= tracked_codes
+        self._final_codes &= tracked_codes
+        self._final_seen = {
+            code: seen
+            for code, seen in self._final_seen.items()
+            if code in tracked_codes
+        }
         self._failing_codes &= tracked_codes
 
         # A delivered parcel's payload can never change again, so it is
         # dropped from the fetch — not from ``codes``/the options list, which
         # stays untouched until the user removes it by hand.
-        codes_to_fetch = [code for code in codes if code not in self._delivered_codes]
+        skipped = self._delivered_codes | self._final_codes
+        codes_to_fetch = [code for code in codes if code not in skipped]
 
         results = await asyncio.gather(
-            *(self._client.async_get_parcel(code) for code in codes_to_fetch),
+            *(
+                self._client.async_get_parcel(code, tokens[code])
+                for code in codes_to_fetch
+            ),
             return_exceptions=True,
         )
 
@@ -270,27 +301,18 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
         saw_429 = False
         for code, result in zip(codes_to_fetch, results, strict=True):
             if isinstance(result, BaseException):
-                if not isinstance(
-                    result, (BurdApiError, aiohttp.ClientError)
-                ):
+                if not isinstance(result, (BurdApiError, aiohttp.ClientError)):
                     raise result
                 errors += 1
-                if (
-                    isinstance(result, BurdApiError)
-                    and result.status_code == 429
-                ):
+                if isinstance(result, BurdApiError) and result.status_code == 429:
                     saw_429 = True
                     if result.retry_after is not None:
                         retry_afters.append(result.retry_after)
                 if code in self._failing_codes:
-                    _LOGGER.debug(
-                        "Burd fetch still failing for %s: %s", code, result
-                    )
+                    _LOGGER.debug("Burd fetch still failing for %s: %s", code, result)
                 else:
                     self._failing_codes.add(code)
-                    _LOGGER.warning(
-                        "Burd fetch failed for %s: %s", code, result
-                    )
+                    _LOGGER.warning("Burd fetch failed for %s: %s", code, result)
                 cached = self._raw_cache.get(code)
                 if cached is not None:
                     raws_by_code[code] = cached
@@ -301,25 +323,19 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
                 _LOGGER.info("Burd fetch for %s recovered", code)
 
             if result is None:
-                # Unknown code, or not scanned yet. Keep prior data if we have
-                # it, otherwise show a pending placeholder so the user still
-                # sees the parcel they asked us to track.
-                raws_by_code[code] = self._raw_cache.get(code) or {
-                    "trackingNumber": code
-                }
+                # Unknown number, or not registered yet. Keep prior data if we
+                # have it, otherwise show a pending placeholder so the user
+                # still sees the parcel they asked us to track.
+                raws_by_code[code] = self._raw_cache.get(code) or {}
                 continue
 
-            # The response's own tracking number can be missing on edge
-            # payloads; fall back to the code we asked for so the sensor keeps
-            # its key.
-            result.setdefault("trackingNumber", code)
             self._raw_cache[code] = result
             raws_by_code[code] = result
 
-        # Codes skipped from the fetch above (already confirmed delivered) —
-        # re-add their cached payload so the delivered sensor keeps its data
-        # until the retention filter drops it.
-        for code in self._delivered_codes:
+        # Codes skipped from the fetch above (delivered, or final past their
+        # grace) — re-add their cached payload so their sensors keep their
+        # data until the user removes them or the retention filter drops them.
+        for code in skipped:
             cached = self._raw_cache.get(code)
             if cached is not None:
                 raws_by_code[code] = cached
@@ -337,9 +353,7 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
                     BACKOFF_CAP_SECONDS,
                 )
             )
-            raise UpdateFailed(
-                "Burd rate-limited (429)", retry_after=retry_after
-            )
+            raise UpdateFailed("Burd rate-limited (429)", retry_after=retry_after)
         self._consecutive_429 = 0
 
         if codes_to_fetch and errors == len(codes_to_fetch) and not raws_by_code:
@@ -347,7 +361,12 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
 
         include_history = self._include_history
         entries = [
-            (code, normalize_parcel(raw, include_history=include_history))
+            (
+                code,
+                normalize_parcel(
+                    raw, tracking_code=code, include_history=include_history
+                ),
+            )
             for code, raw in raws_by_code.items()
         ]
         active = [parcel for _, parcel in entries if not parcel["delivered"]]
@@ -359,6 +378,9 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
         self._delivered_codes = {
             code for code, parcel in entries if parcel["delivered"]
         }
+        self._final_codes = self._final_past_grace(
+            {code: raws_by_code[code] for code, p in entries if not p["delivered"]}
+        )
 
         delivered_sorted = sort_parcels_by_ts(
             delivered, "delivered_at", descending=True
@@ -388,11 +410,31 @@ class BurdCoordinator(DataUpdateCoordinator[list[dict]]):
             self.last_success_time = datetime.now(UTC)
 
         now = dt_util.now()
-        self._current_tier_minutes = _hottest_tier_minutes(normalized_active, now)
+        polling = [
+            parcel
+            for code, parcel in entries
+            if not parcel["delivered"] and code not in self._final_codes
+        ]
+        self._current_tier_minutes = _hottest_tier_minutes(polling, now)
         self.update_interval = _next_update_interval(
             now, self._current_tier_minutes, self.config_entry.entry_id
         )
         return normalized_active
+
+    def _final_past_grace(self, raws: dict[str, dict]) -> set[str]:
+        """Return the codes cancelled or returned more than the grace period ago."""
+        now = datetime.now(UTC)
+        grace = timedelta(hours=FINAL_GRACE_HOURS)
+        final: set[str] = set()
+        for code, raw in raws.items():
+            is_done, created = is_final(raw)
+            if not is_done:
+                self._final_seen.pop(code, None)
+                continue
+            since = parse_iso(created) or self._final_seen.setdefault(code, now)
+            if now - since >= grace:
+                final.add(code)
+        return final
 
     def _fire_change_events(self, parcels: list[dict]) -> None:
         """Fire registered / status-changed / delivered / delivery-time events.

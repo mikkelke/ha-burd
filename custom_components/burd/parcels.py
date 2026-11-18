@@ -6,11 +6,9 @@ carrier-specific mapping (which you rewrite per carrier) apart from the
 coordinator (which is nearly identical everywhere), and it makes the mapping
 trivially unit-testable without spinning up HA.
 
-Two things here are carrier-specific and marked ``TODO(carrier)``:
-:data:`_STATUS_MAP` and :func:`normalize_parcel`. Everything else — the
-timestamp parsing, the history builder, the sort contract, the delivered
-filter, the one-shot warning for unmapped statuses — is suite-wide machinery
-and should be left alone.
+The carrier-specific parts are :data:`_STATUS_MAP`, the history builder and
+:func:`normalize_parcel`. Everything else (the sort contract, the delivered
+filter, the one-shot warnings) is suite-wide machinery.
 """
 
 from __future__ import annotations
@@ -31,6 +29,8 @@ from .const import (
     ParcelStatus,
 )
 
+CARRIER_NAME = "Burd"
+
 _LOGGER = logging.getLogger(__name__)
 
 # Where users report a status we do not map yet. Rewritten by the bootstrap
@@ -40,72 +40,96 @@ _LOGGER = logging.getLogger(__name__)
 # The ``?template=`` parameter matters: without it the link opens a blank form,
 # and the report comes back missing the version and the log line we need.
 NEW_ISSUE_URL = (
-    "https://github.com/ha-parcel-integrations/ha-burd/issues/new"
-    "?template=unrecognised_status.yml"
+    "https://github.com/mikkelke/ha-burd/issues/new?template=unrecognised_status.yml"
 )
 
-# TODO(carrier): map the carrier's own status vocabulary onto ParcelStatus.
-#
-# The keys are whatever the API reports; the values must come from the
-# canonical enum — never invent a new one. Prefer mapping too little over
-# mapping wrongly: an unmapped value surfaces as ``unknown`` plus a one-shot
-# warning that asks the user to report it, which is how the map grows.
+# Burd's status types, lower-cased: the status list spells them camelCase,
+# the labels endpoint PascalCase, so every lookup is case-insensitive.
 _STATUS_MAP: dict[str, ParcelStatus] = {
-    "REGISTERED": ParcelStatus.REGISTERED,
-    "IN_TRANSIT": ParcelStatus.IN_TRANSIT,
-    "OUT_FOR_DELIVERY": ParcelStatus.OUT_FOR_DELIVERY,
-    "AT_PICKUP_POINT": ParcelStatus.AT_PICKUP_POINT,
-    "DELIVERED": ParcelStatus.DELIVERED,
-    "RETURN_TO_SENDER": ParcelStatus.RETURNING,
-    "EXCEPTION": ParcelStatus.PROBLEM,
+    # The webshop announced it; Burd does not have it yet.
+    "registered": ParcelStatus.REGISTERED,
+    # Burd expected it today but did not get it from the webshop; it is
+    # still on its way to Burd, not a fault with the delivery.
+    "notreceived": ParcelStatus.REGISTERED,
+    # At Burd's terminal.
+    "received": ParcelStatus.IN_TRANSIT,
+    # At Burd, delivery moved to another evening.
+    "receivedflex": ParcelStatus.IN_TRANSIT,
+    "deliveryontheway": ParcelStatus.OUT_FOR_DELIVERY,
+    "delivered": ParcelStatus.DELIVERED,
+    # Burd retries within two working days before returning it.
+    "deliveryfailed": ParcelStatus.PROBLEM,
+    "returntosender": ParcelStatus.RETURNING,
+    "canceled": ParcelStatus.PROBLEM,
 }
 
-# Status codes we have already warned about, so each unmapped one is logged
-# only once per HA session instead of on every poll.
-_unmapped_statuses_logged: set[str] = set()
+# Status types after which Burd does nothing more with the shipment, other
+# than delivered (which the coordinator already skips on its own).
+FINAL_STATUS_TYPES = frozenset({"returntosender", "canceled"})
+
+# A few webshop ids whose title-cased form would be wrong.
+_SENDER_NAMES = {"postnord": "PostNord"}
+
+# Keys already warned about, so each one-shot warning fires once per session.
+_warned: set[str] = set()
+
+
+def warn_once(key: str, message: str, *args: Any) -> None:
+    """Log a one-shot WARNING with a copy-paste issue link.
+
+    ``message`` names keys, codes or field names only, never a value that
+    could identify a person, an address or a shipment.
+    """
+    if key in _warned:
+        return
+    _warned.add(key)
+    _LOGGER.warning(
+        "Unrecognised Burd data — help us handle it. Open an issue "
+        "and paste this line: %s\n  %s",
+        NEW_ISSUE_URL,
+        message % args if args else message,
+    )
+
+
+def _status_key(code: str | None) -> str | None:
+    return code.lower() if isinstance(code, str) and code else None
 
 
 def _warn_unmapped_status(code: str) -> None:
     """Log an unmapped carrier status once, with a copy-paste issue link."""
-    if code in _unmapped_statuses_logged:
-        return
-    _unmapped_statuses_logged.add(code)
-    _LOGGER.warning(
-        "Unrecognised Burd status — help us map it. Open an issue "
-        "and paste this line: %s\n  status=%s → reported as 'unknown'",
-        NEW_ISSUE_URL,
-        code,
-    )
+    warn_once("status:" + code, "status=%s → reported as 'unknown'", code)
 
 
 def map_parcel_status(code: str | None) -> ParcelStatus:
-    """Map a carrier status code to a canonical :class:`ParcelStatus`.
+    """Map a Burd status type to a canonical :class:`ParcelStatus`.
 
-    ``None`` (a not-yet-scanned parcel) reports ``unknown`` silently; an
-    unrecognised code reports ``unknown`` with a one-shot warning.
+    ``None`` reports ``unknown`` silently; an unrecognised type reports
+    ``unknown`` with a one-shot warning.
     """
-    if not code:
+    key = _status_key(code)
+    if key is None:
         return ParcelStatus.UNKNOWN
-    mapped = _STATUS_MAP.get(code)
+    mapped = _STATUS_MAP.get(key)
     if mapped is not None:
         return mapped
-    _warn_unmapped_status(code)
+    _warn_unmapped_status(str(code))
     return ParcelStatus.UNKNOWN
 
 
 def map_event_status(code: str | None) -> ParcelStatus | None:
-    """Map a history entry's status code to a canonical status, or ``None``.
+    """Map a history entry's status type to a canonical status, or ``None``.
 
-    Unmapped codes keep ``status: null`` on the history entry (rather than
+    Unmapped types keep ``status: null`` on the history entry (rather than
     ``unknown``, so a consumer can tell "no mapping" from "mapped to unknown")
     and warn once, reusing the parcel-status one-shot set.
     """
-    if not code:
+    key = _status_key(code)
+    if key is None:
         return None
-    mapped = _STATUS_MAP.get(code)
+    mapped = _STATUS_MAP.get(key)
     if mapped is not None:
         return mapped
-    _warn_unmapped_status(code)
+    _warn_unmapped_status(str(code))
     return None
 
 
@@ -126,141 +150,192 @@ def parse_iso(value: str | None) -> datetime | None:
     return parsed
 
 
-def to_iso_timestamp(value: Any) -> str | None:
-    """Return an ISO 8601 string for an API timestamp field.
+def to_utc_iso(value: Any, field: str) -> str | None:
+    """Return Burd's timestamp as an aware ISO 8601 string, or ``None``.
 
-    Numbers are treated as **epoch milliseconds** — the common case for the
-    consumer APIs in this suite. Strings pass through untouched; their
-    consumers are guarded by :func:`parse_iso`. Adjust the numeric branch if
-    your carrier stamps in seconds.
+    Burd stamps in UTC. A value without an offset is read as UTC and named
+    once in a warning (field name only), so a real one can confirm it.
     """
-    if value is None:
+    if not isinstance(value, str) or not value:
         return None
-    if isinstance(value, (int, float)):
-        try:
-            return datetime.fromtimestamp(value / 1000, tz=UTC).isoformat()
-        except (OverflowError, OSError, ValueError):
-            return None
-    return str(value)
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        warn_once("unparseable:" + field, "unparseable timestamp in %s", field)
+        return None
+    if parsed.tzinfo is None:
+        warn_once(
+            "naive:" + field, "%s has no UTC offset; read as UTC, please confirm", field
+        )
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.isoformat()
 
 
-def format_dimensions(
-    length: float | None, width: float | None, height: float | None
-) -> dict[str, Any] | None:
-    """Return the canonical ``dimensions`` dict, or ``None`` when incomplete.
+def _ordered_statuses(statuses: list | None) -> list[tuple[str | None, dict]]:
+    """Return ``(created_iso, entry)`` pairs, oldest first.
 
-    Units contract: **centimetres**, with ``text`` pre-formatted as
-    ``"L x W x H cm"`` (integer values, lowercase ``x``) so dashboards can show
-    a dimension without doing their own formatting. Convert before calling if
-    the carrier reports millimetres or inches.
+    Entries without a parseable ``created`` keep their place after the dated
+    ones, in the order Burd sent them.
     """
-    if length is None or width is None or height is None:
-        return None
-    return {
-        "length": length,
-        "width": width,
-        "height": height,
-        "text": f"{round(length)} x {round(width)} x {round(height)} cm",
-    }
+    dated: list[tuple[datetime, str, dict]] = []
+    undated: list[tuple[str | None, dict]] = []
+    for entry in statuses or []:
+        if not isinstance(entry, dict):
+            continue
+        created = to_utc_iso(entry.get("created"), "created")
+        parsed = parse_iso(created)
+        if created is None or parsed is None:
+            undated.append((None, entry))
+        else:
+            dated.append((parsed, created, entry))
+    dated.sort(key=lambda item: item[0])
+    return [(created, entry) for _, created, entry in dated] + undated
+
+
+def _status_text(entry: dict, descriptions: dict[str, str]) -> str | None:
+    """Burd's own text for a status entry, else its status type."""
+    status_type = entry.get("statusType")
+    key = _status_key(status_type)
+    if key and descriptions.get(key):
+        return descriptions[key]
+    return entry.get("displayText") or status_type or None
 
 
 def build_history(
-    events: list | None, *, max_events: int = HISTORY_MAX_EVENTS
+    statuses: list | None,
+    descriptions: dict[str, str] | None = None,
+    *,
+    max_events: int = HISTORY_MAX_EVENTS,
 ) -> list[dict]:
-    """Build the canonical ``history`` list from the carrier's event list.
+    """Build the canonical ``history`` list from Burd's status list.
 
     Each entry is ``{timestamp, status, raw_status}`` — identical across all
     suite carriers, and top-level (not under ``raw``) so it survives the
-    aggregator's ``strip_raw()``. ``raw_status`` is the carrier's own text, or
-    its event code when the API has no human-readable text. Sorted oldest →
-    newest and capped to the most recent ``max_events``.
-
-    TODO(carrier): adjust the three field lookups below to the real payload.
+    aggregator's ``strip_raw()``. Sorted oldest → newest and capped to the
+    most recent ``max_events``. Entries without a timestamp are left out.
     """
-    parseable: list[tuple[datetime, dict]] = []
-    unparseable: list[dict] = []
-    for event in events or []:
-        if not isinstance(event, dict):
-            continue
-        timestamp = to_iso_timestamp(event.get("timestamp"))
-        if not timestamp:
-            continue
-        entry = {
-            "timestamp": timestamp,
-            "status": map_event_status(event.get("statusCode")),
-            "raw_status": event.get("description") or event.get("statusCode"),
+    history = [
+        {
+            "timestamp": created,
+            "status": map_event_status(entry.get("statusType")),
+            "raw_status": _status_text(entry, descriptions or {}),
         }
-        parsed = parse_iso(timestamp)
-        if parsed is None:
-            unparseable.append(entry)
-        else:
-            parseable.append((parsed, entry))
-    parseable.sort(key=lambda item: item[0])
-    ordered = [entry for _, entry in parseable] + unparseable
-    return ordered[-max_events:]
+        for created, entry in _ordered_statuses(statuses)
+        if created is not None
+    ]
+    return history[-max_events:]
 
 
 def tracking_url(tracking_code: str | None) -> str | None:
-    """Construct the consumer tracking deep-link for a parcel."""
+    """Construct the burd.dk tracking deep-link for a shipment."""
     if not tracking_code:
         return None
     return TRACKING_URL.format(tracking_code=tracking_code)
 
 
-def normalize_parcel(raw: dict, *, include_history: bool = False) -> dict:
+def sender_name(customer_id: str | None) -> str | None:
+    """Return a display name for Burd's webshop id (``proshop`` → ``Proshop``)."""
+    if not isinstance(customer_id, str) or not customer_id.strip():
+        return None
+    key = customer_id.strip()
+    known = _SENDER_NAMES.get(key.lower())
+    if known:
+        return known
+    return " ".join(word[:1].upper() + word[1:] for word in key.split())
+
+
+def is_final(raw: dict) -> tuple[bool, str | None]:
+    """Whether the newest status is cancelled or returned, and when it was set."""
+    ordered = _ordered_statuses(raw.get("statuses"))
+    if not ordered:
+        return False, None
+    created, newest = ordered[-1]
+    return _status_key(newest.get("statusType")) in FINAL_STATUS_TYPES, created
+
+
+def normalize_parcel(
+    raw: dict, *, tracking_code: str | None = None, include_history: bool = False
+) -> dict:
     """Return a carrier-agnostic parcel dict with the payload under ``raw``.
 
-    TODO(carrier): this function is the heart of a carrier integration — rewrite
-    the field lookups for the real payload. The **keys of the returned dict are
-    the contract**: every carrier in the suite returns exactly these, in this
-    order, and the aggregator and cross-carrier dashboards depend on it. Set a
-    key to ``None`` when the carrier does not expose it — never omit it.
+    The **keys of the returned dict are the contract**: every carrier in the
+    suite returns exactly these, in this order. ``raw`` is the dict
+    :mod:`.api` assembled; a not-yet-known shipment is ``{}``.
 
-    Rules worth keeping when you rewrite the body:
-
-    * ``status`` is canonical, ``raw_status`` is the carrier's own text.
-    * A delivered parcel has ``delivered_at`` set and ``planned_from`` /
-      ``planned_to`` cleared — the ETA is meaningless once it has arrived.
-    * ``planned_to`` is ``None`` for a point estimate; only fill it when the
-      carrier genuinely reports a *window*.
-    * ``weight`` is kilograms, ``dimensions`` centimetres (see
-      :func:`format_dimensions`).
-    * ``history`` is ``None`` when the option is off — the key still exists.
+    * The status is the newest entry's. An unmapped newest entry falls back to
+      the newest one that maps, and only then to ``unknown``.
+    * ``planned_from`` / ``planned_to`` are the Min levering window, only for
+      a parcel added with that link, and cleared once the shipment is
+      delivered, cancelled or returned.
+    * ``receiver`` is always ``None``: Burd's only source for it is the
+      Min levering reply, whose personal fields are never kept.
     """
-    tracking_code = raw.get("trackingNumber")
-    status_code = raw.get("statusCode")
-    status = map_parcel_status(status_code)
+    statuses = raw.get("statuses") or []
+    descriptions = raw.get("descriptions") or {}
+    ordered = _ordered_statuses(statuses)
+    barcode = raw.get("number") or tracking_code
+
+    status = ParcelStatus.UNKNOWN
+    raw_status: str | None = None
+    current_type: str | None = None
+    if ordered:
+        newest = ordered[-1][1]
+        raw_status = _status_text(newest, descriptions)
+        current_type = _status_key(newest.get("statusType"))
+        status = map_parcel_status(newest.get("statusType"))
+        if status is ParcelStatus.UNKNOWN:
+            for _, entry in reversed(ordered[:-1]):
+                mapped = _STATUS_MAP.get(_status_key(entry.get("statusType")) or "")
+                if mapped is not None:
+                    status = mapped
+                    break
     delivered = status is ParcelStatus.DELIVERED
 
-    eta = raw.get("estimatedDelivery") or {}
-    planned_from = to_iso_timestamp(eta.get("from"))
-    planned_to = to_iso_timestamp(eta.get("to"))
-    if planned_from and planned_to and parse_iso(planned_to) == parse_iso(planned_from):
-        # Same instant twice is a point estimate, not a window.
-        planned_to = None
+    delivered_at = None
+    if delivered:
+        delivered_at = next(
+            (
+                created
+                for created, entry in reversed(ordered)
+                if _status_key(entry.get("statusType")) == "delivered"
+            ),
+            None,
+        )
 
-    pickup_point = raw.get("pickupPoint") or {}
-    dimensions = raw.get("dimensionsCm") or {}
+    window = raw.get("timeWindow") or {}
+    planned_from = planned_to = None
+    if not delivered and current_type not in FINAL_STATUS_TYPES:
+        planned_from = to_utc_iso(window.get("start"), "timeWindow.start")
+        planned_to = to_utc_iso(window.get("end"), "timeWindow.end")
+        if (
+            planned_from
+            and planned_to
+            and parse_iso(planned_to) == parse_iso(planned_from)
+        ):
+            planned_to = None
+
+    customer_id = next(
+        (e.get("customerId") for _, e in reversed(ordered) if e.get("customerId")),
+        None,
+    )
 
     return {
-        "carrier": "Burd",
-        "barcode": tracking_code,
-        "sender": raw.get("sender") or None,
-        "receiver": raw.get("recipient") or None,
+        "carrier": CARRIER_NAME,
+        "barcode": barcode,
+        "sender": raw.get("companyName") or sender_name(customer_id),
+        "receiver": None,
         "status": status,
-        "raw_status": raw.get("statusText") or status_code,
+        "raw_status": raw_status,
         "delivered": delivered,
-        "delivered_at": to_iso_timestamp(raw.get("deliveredAt")) if delivered else None,
-        "planned_from": None if delivered else planned_from,
-        "planned_to": None if delivered else planned_to,
-        "pickup": status is ParcelStatus.AT_PICKUP_POINT,
-        "pickup_point": pickup_point.get("name") or None,
-        "url": tracking_url(tracking_code),
-        "weight": raw.get("weightKg"),
-        "dimensions": format_dimensions(
-            dimensions.get("length"), dimensions.get("width"), dimensions.get("height")
-        ),
-        "history": build_history(raw.get("events")) if include_history else None,
+        "delivered_at": delivered_at,
+        "planned_from": planned_from,
+        "planned_to": planned_to,
+        "pickup": False,
+        "pickup_point": None,
+        "url": tracking_url(barcode),
+        "weight": None,
+        "dimensions": None,
+        "history": build_history(statuses, descriptions) if include_history else None,
         "raw": raw,
     }
 
