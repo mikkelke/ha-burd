@@ -45,6 +45,7 @@ KNOWN_STATUS_KEYS = frozenset(
         "orderNumber",
         "customerId",
         "destinationType",
+        "id",
         "year",
     }
 )
