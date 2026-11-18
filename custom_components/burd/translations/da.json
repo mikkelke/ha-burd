@@ -54,12 +54,12 @@
       },
       "parcels": {
         "title": "Administrer pakker",
-        "description": "Én forsendelse pr. linje. Indsæt Min levering-linket (https://k.burd.dk/f/…) fra Burds sms eller e-mail, eller indtast det 18-cifrede forsendelsesnummer. Med linket viser integrationen også, hvilken aften Burd planlægger at levere; med nummeret alene kun status.",
+        "description": "Én forsendelse pr. linje. Indsæt Min levering-linket fra Burds sms eller e-mail, eller indtast det 18-cifrede forsendelsesnummer. Med linket viser integrationen også, hvilken aften Burd planlægger at levere; med nummeret alene kun status.",
         "data": {
           "tracking_codes": "Links eller forsendelsesnumre"
         },
         "data_description": {
-          "tracking_codes": "Et Min levering-link, et sporingslink fra burd.dk, NUMMER/TOKEN eller et forsendelsesnummer."
+          "tracking_codes": "Et Min levering-link, et sporingslink fra Burds hjemmeside, NUMMER/TOKEN eller et forsendelsesnummer."
         }
       },
       "settings": {
@@ -73,7 +73,7 @@
     },
     "error": {
       "invalid_tracking_code": "Det ligner ikke et forsendelsesnummer eller link fra Burd.",
-      "unsupported_link": "Kun Min levering-linket (https://k.burd.dk/f/…) og sporingslinket fra burd.dk understøttes.",
+      "unsupported_link": "Kun Min levering-linket og sporingslinket fra Burds hjemmeside understøttes.",
       "not_recognised": "Burd genkender ikke det Min levering-link. Det kan være udløbet; indtast forsendelsesnummeret i stedet.",
       "token_mismatch": "Det Min levering-link hører til et andet forsendelsesnummer.",
       "cannot_connect": "Kunne ikke få forbindelse til Burd. Prøv igen senere.",

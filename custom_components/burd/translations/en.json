@@ -54,12 +54,12 @@
       },
       "parcels": {
         "title": "Manage parcels",
-        "description": "One shipment per line. Paste the Min levering link (https://k.burd.dk/f/…) from Burd's text message or e-mail, or enter the 18-digit shipment number. With the link, the integration also shows the evening Burd plans to deliver; with the number alone, only the status.",
+        "description": "One shipment per line. Paste the Min levering link from Burd's text message or e-mail, or enter the 18-digit shipment number. With the link, the integration also shows the evening Burd plans to deliver; with the number alone, only the status.",
         "data": {
           "tracking_codes": "Links or shipment numbers"
         },
         "data_description": {
-          "tracking_codes": "A Min levering link, a burd.dk tracking link, NUMBER/TOKEN or a shipment number."
+          "tracking_codes": "A Min levering link, a tracking link from Burd's website, NUMBER/TOKEN or a shipment number."
         }
       },
       "settings": {
@@ -73,7 +73,7 @@
     },
     "error": {
       "invalid_tracking_code": "That does not look like a Burd shipment number or link.",
-      "unsupported_link": "Only the Min levering link (https://k.burd.dk/f/…) and the burd.dk tracking link are supported.",
+      "unsupported_link": "Only the Min levering link and the tracking link from Burd's website are supported.",
       "not_recognised": "Burd does not recognise that Min levering link. It may have expired; enter the shipment number instead.",
       "token_mismatch": "That Min levering link belongs to another shipment number.",
       "cannot_connect": "Could not reach Burd. Try again later.",
